@@ -1,0 +1,20 @@
+# Runtime dependencies for Σuler.SC
+# Install with:  pip install -r requirements.txt
+
+# Window shell. On Windows this pulls pythonnet for WebView2.
+pywebview>=5.0
+
+# Computer algebra: parsing, solving, calculus, matrices, plotting data.
+sympy>=1.13
+
+# Numeric evaluation for the plot sampler only.
+numpy>=1.26
+
+# Optional: accurate RAM probing. The engine falls back to kernel32 when absent.
+psutil>=5.9
+
+# Test runner, not needed to run the application.
+pytest>=8.0
+
+# Packaging only; see build/. Uncomment to freeze the app.
+# pyinstaller>=6.0

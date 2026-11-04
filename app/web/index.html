@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' data:;">
+<title>Σuler.SC</title>
+<script>
+/* Boot guard. Runs before any other script so that a failure anywhere in the
+   frontend is shown on screen instead of leaving a silent, frozen window. */
+(function () {
+  var shown = false;
+  function report(text) {
+    if (shown) return;
+    shown = true;
+    var show = function () {
+      var box = document.getElementById('boot-error');
+      if (!box) return setTimeout(show, 50);
+      box.hidden = false;
+      box.querySelector('pre').textContent = String(text).slice(0, 4000);
+    };
+    show();
+  }
+  window.__bootReport = report;
+  window.addEventListener('error', function (e) {
+    report((e.message || 'error') + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    report('Unhandled promise rejection: ' + (r && (r.stack || r.message) || r));
+  });
+})();
+</script>
+<link rel="icon" href="favicon.ico">
+<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="vendor/mathlive-fonts.css">
+<link rel="stylesheet" href="vendor/mathlive-static.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="titlebar">
+    <div class="logo" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="brand">Σuler.SC</div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true"  data-tab="calc"      data-i18n="tab.calc">Калькулятор</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="calculus"  data-i18n="tab.analysis">Пределы</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="analysis"  data-i18n="tab.graph">Анализ</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="matrix"    data-i18n="tab.matrix">Матрицы</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="equations" data-i18n="tab.equations">Уравнения</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="ai"        data-i18n="tab.ai">ИИ</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="settings"  data-i18n="tab.settings">Настройки</button>
+    </nav>
+    <div class="top-right">
+      <div class="unit-toggle" role="group">
+        <button data-unit="deg" aria-pressed="true">DEG</button>
+        <button data-unit="rad" aria-pressed="false">RAD</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================ КАЛЬКУЛЯТОР ============================ -->
+  <section class="view active" id="view-calc">
+    <div class="calc-shell">
+      <div class="calc-body">
+        <div class="lcd">
+          <div class="lcd-status">
+            <span id="lcd-unit">DEG</span>
+            <span data-i18n="calc.mode">COMP</span>
+            <span class="grow"></span>
+            <span id="form-chip" class="form-chip">exact</span>
+            <span id="lcd-model">—</span>
+          </div>
+          <math-field id="lcd-input" class="lcd-input" default-mode="math"></math-field>
+          <div class="lcd-out" id="lcd-out"></div>
+        </div>
+        <div class="keys" id="keys"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ ПРЕДЕЛЫ И ИНТЕГРАЛЫ ============================ -->
+  <section class="view" id="view-calculus">
+    <div class="pane">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title" data-i18n="calculus.title">Пределы, производные, интегралы</span>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label data-i18n="calculus.fn">Функция</label>
+            <math-field class="mf-input" id="cx-fn">x^2-1</math-field>
+          </div>
+          <div class="grid-3" style="margin-top:10px">
+            <div class="field">
+              <label data-i18n="calculus.point">Точка</label>
+              <math-field class="mf-input" id="cx-point">1</math-field>
+            </div>
+            <div class="field">
+              <label data-i18n="calculus.lower">Нижний предел</label>
+              <math-field class="mf-input" id="cx-lower">0</math-field>
+            </div>
+            <div class="field">
+              <label data-i18n="calculus.upper">Верхний предел</label>
+              <math-field class="mf-input" id="cx-upper">1</math-field>
+            </div>
+          </div>
+          <div class="composer-row" style="margin-top:8px">
+            <button class="btn small" id="btn-kb-cx" data-i18n="calc.keyboard">⌨ Клавиатура</button>
+            <span class="note" data-i18n="common.optional">наберите вручную или откройте клавиатуру</span>
+          </div>
+          <div class="keys-inline" id="kb-cx" hidden></div>
+
+          <div class="op-grid" style="margin-top:12px">
+            <button class="btn" data-cx="limit" data-dir="both" data-i18n="calculus.limit.both">Двусторонний</button>
+            <button class="btn" data-cx="limit" data-dir="left" data-i18n="calculus.limit.left">Слева</button>
+            <button class="btn" data-cx="limit" data-dir="right" data-i18n="calculus.limit.right">Справа</button>
+            <button class="btn" data-cx="derivative" data-i18n="calculus.derivative">Производная</button>
+            <button class="btn" data-cx="critical" data-i18n="calculus.critical">Критические точки</button>
+            <button class="btn" data-cx="integral" data-i18n="calculus.integral">Неопределённый интеграл</button>
+            <button class="btn primary" data-cx="definite" data-i18n="calculus.definite">Определённый интеграл</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="flex:1; min-height:0; margin-top:10px">
+        <div class="card-head"><span class="card-title" data-i18n="common.result">Результат</span></div>
+        <div class="card-body"><div class="result" id="cx-out"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ АНАЛИЗ ФУНКЦИИ ============================ -->
+  <section class="view" id="view-analysis">
+    <div class="pane">
+      <div class="card" style="flex:0 0 auto">
+        <div class="card-head">
+          <span class="card-title" data-i18n="analysis.title">Анализ функции</span>
+          <span class="card-note" data-i18n="analysis.hint">пределы, экстремумы, асимптоты</span>
+        </div>
+        <div class="card-body">
+          <div class="grid-2">
+            <div class="field">
+              <label data-i18n="calculus.fn">Функция</label>
+              <math-field class="mf-input" id="an-fn">x^3-3x</math-field>
+            </div>
+            <div class="field">
+              <label data-i18n="analysis.interval">Отрезок для экстремумов</label>
+              <math-field class="mf-input" id="an-interval">-2; 2</math-field>
+            </div>
+          </div>
+          <div class="composer-row" style="margin-top:8px">
+            <button class="btn small" id="btn-kb-an" data-i18n="calc.keyboard">⌨ Клавиатура</button>
+          </div>
+          <div class="keys-inline" id="kb-an" hidden></div>
+          <div class="op-grid" style="margin-top:10px">
+            <button class="btn primary" id="btn-analyze" data-i18n="analysis.full">Full analysis</button>
+            <button class="btn" id="btn-graph" data-i18n="analysis.graph">Plot</button>
+            <button class="btn" id="btn-autoscale" data-i18n="analysis.autoscale">Fit Y</button>
+            <button class="btn" id="btn-graph-fullscreen">⛶ Fullscreen graph</button>
+            <button class="btn" id="btn-clear-analysis" data-i18n="common.clear">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="flex:1; min-height:0; margin-top:10px">
+        <div class="card">
+          <div class="card-head"><span class="card-title" data-i18n="common.result">Результат</span></div>
+          <div class="card-body"><div class="result" id="analysis-out"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title" data-i18n="analysis.graph">График</span>
+            <span class="card-note" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
+          </div>
+          <div class="graph-wrap">
+            <canvas id="graph-canvas"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ МАТРИЦЫ ============================ -->
+  <section class="view" id="view-matrix">
+    <div class="pane">
+      <div class="grid-2" style="flex:1; min-height:0">
+
+        <!-- ------------------------------------------------ matrix editor -->
+        <div class="card">
+          <div class="card-head">
+            <button class="btn small" id="mx-prev" title="Previous">&#8592;</button>
+            <span class="mx-name" id="mx-name">&mdash;</span>
+            <button class="btn small" id="mx-next" title="Next">&#8594;</button>
+            <span class="grow"></span>
+            <span class="card-note" id="mx-size">3 &times; 3</span>
+          </div>
+
+          <div class="card-body" style="display:flex; flex-direction:column; gap:10px">
+
+            <!-- size + fill: everything that changes the shape -->
+            <div class="matrix-tools">
+              <span class="tool-label" data-i18n="matrix.size">Размер</span>
+              <button class="btn small" data-mrow="+" title="Add row">+&#1088;&#1103;&#1076;</button>
+              <button class="btn small" data-mrow="-" title="Remove row">&minus;&#1088;&#1103;&#1076;</button>
+              <button class="btn small" data-mcol="+" title="Add column">+&#1089;&#1090;&#1083;&#1073;</button>
+              <button class="btn small" data-mcol="-" title="Remove column">&minus;&#1089;&#1090;&#1083;&#1073;</button>
+              <span class="tool-sep"></span>
+              <button class="btn small" data-mfill="identity" data-i18n="matrix.identity">Единичная</button>
+              <button class="btn small" data-mfill="example" data-i18n="matrix.random">Пример</button>
+              <button class="btn small" data-mfill="clear" data-i18n="matrix.clear">Очистить</button>
+            </div>
+
+            <div class="matrix-grid" id="grid-a"></div>
+          </div>
+
+          <!-- name + save + delete: one place, next to the carousel -->
+          <div class="pane-actions">
+            <span class="tool-label" data-i18n="matrix.name">Имя</span>
+            <input type="text" id="mx-letter" class="mx-letter" maxlength="1" value="A"
+                   aria-label="Matrix letter">
+            <button class="btn small primary" id="mx-save" data-i18n="matrix.save">Сохранить</button>
+            <button class="btn small" id="mx-delete" data-i18n="matrix.remove">Удалить</button>
+            <span class="grow"></span>
+            <span class="status-line" id="mx-status"></span>
+          </div>
+        </div>
+
+        <!-- ------------------------------------------------ calculator -->
+        <div class="card" style="display:flex; flex-direction:column; min-height:0">
+          <div class="card-body mx-calc">
+            <div class="lcd lcd-grow" style="margin:0">
+              <div class="lcd-status">
+                <span data-i18n="tab.matrix">Матрицы</span>
+                <span class="grow"></span>
+                <span id="mx-form"></span>
+              </div>
+              <math-field id="mx-input" class="lcd-input" default-mode="math"></math-field>
+              <div class="lcd-out" id="mx-out"></div>
+            </div>
+
+            <div class="keys" id="mx-keys" style="margin-top:8px"></div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ УРАВНЕНИЯ ============================ -->
+  <section class="view" id="view-equations">
+    <div class="pane">
+      <div class="grid-2" style="flex:1; min-height:0">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title" data-i18n="eq.title">Уравнения и неравенства</span>
+            <span class="grow"></span>
+            <button class="btn small" id="btn-eq-add" data-i18n="eq.add">Добавить</button>
+          </div>
+          <div class="card-body" style="gap:8px; display:flex; flex-direction:column">
+            <p class="note" data-i18n="eq.hint">По одному уравнению в строке. Два и более — решаются как система.</p>
+            <div id="eq-rows" class="eq-rows"></div>
+          </div>
+          <div class="composer-row" style="padding:0 12px 8px">
+            <button class="btn small" id="btn-kb-eq" data-i18n="calc.keyboard">⌨ Клавиатура</button>
+          </div>
+          <div class="keys-inline" id="kb-eq" hidden></div>
+          <div class="card-head" style="border-top:3px solid var(--accent)">
+            <button class="btn primary" id="btn-eq-solve" data-i18n="common.solve">Решение</button>
+            <button class="btn" id="btn-steps" data-i18n="steps.show">По шагам</button>
+            <span class="grow"></span>
+            <button class="btn" id="btn-eq-clear" data-i18n="common.clear">Очистить</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title" data-i18n="common.result">Результат</span>
+          </div>
+          <div class="card-body"><div class="result" id="eq-out"></div></div>
+          <div class="pane-actions">
+            <button class="btn small" id="btn-export-pdf" data-i18n="export.pdf">PDF</button>
+            <button class="btn small" id="btn-export-tex" data-i18n="export.latex">LaTeX</button>
+            <span class="grow"></span>
+            <span class="status-line" id="export-status"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ ИИ ============================ -->
+  <section class="view" id="view-ai">
+    <div class="pane">
+      <div class="card" style="flex:1; min-height:0">
+        <div class="card-head">
+          <span class="card-title" data-i18n="ai.title">Решение с ИИ</span>
+          <span class="chip" id="ai-model-chip">—</span>
+          <span class="card-note" id="ai-stats">—</span>
+        </div>
+
+        <!-- Conversation tabs: one history per tab -->
+        <div class="chat-tabs" id="chat-tabs" role="tablist"></div>
+
+        <div class="card-body" id="ai-body"><div class="chat" id="chat"></div></div>
+        <div class="composer">
+          <div class="composer-row" id="attach-row" hidden>
+            <div class="thumb">
+              <img id="thumb-img" alt="">
+              <span id="thumb-name"></span>
+              <button class="btn small" id="btn-unattach" data-i18n="ai.unattach">убрать</button>
+            </div>
+          </div>
+          <textarea id="ai-input" data-i18n-ph="ai.placeholder"></textarea>
+          <div class="composer-row">
+            <button class="btn" id="btn-photo" data-i18n="ai.photo">Фото</button>
+            <button class="btn" id="btn-newdialog" data-i18n="ai.new">Новый диалог</button>
+            <span class="grow"></span>
+            <button class="btn" id="btn-stop" disabled data-i18n="ai.stop">Стоп</button>
+            <button class="btn primary" id="btn-send" data-i18n="ai.send">Отправить</button>
+          </div>
+          <div class="status-line" id="ai-status"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ НАСТРОЙКИ ============================ -->
+
+
+  <section class="view" id="view-settings">
+    <div class="pane settings-scroll">
+
+      <div class="card">
+        <div class="card-head"><span class="card-title" data-i18n="settings.language">Язык интерфейса</span></div>
+        <div class="card-body">
+          <div class="lang-grid" id="lang-grid"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="card-head">
+          <span class="card-title" data-i18n="settings.theme">Тема оформления</span>
+          <span class="card-note" data-i18n="settings.theme_note">авто следует за системой</span>
+        </div>
+        <div class="card-body">
+          <div class="theme-switch" role="group" aria-label="Theme">
+            <button data-theme-choice="auto" aria-pressed="true" data-i18n="theme.auto">Авто</button>
+            <button data-theme-choice="light" aria-pressed="false" data-i18n="theme.light">Светлая</button>
+            <button data-theme-choice="dark" aria-pressed="false" data-i18n="theme.dark">Тёмная</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="card-head">
+          <span class="card-title" data-i18n="settings.hardware">Комплектующие</span>
+          <span class="card-note" data-i18n="settings.hardware_note">определяется один раз</span>
+        </div>
+        <div class="card-body">
+          <div class="result" id="hw-out"></div>
+          <div class="composer-row" style="margin-top:10px">
+            <button class="btn" id="btn-hw-rescan" data-i18n="settings.rescan">Определить заново</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="card-head">
+          <span class="card-title" data-i18n="settings.model">Локальная модель</span>
+          <span class="chip" id="ollama-chip" data-i18n="settings.checking">проверка…</span>
+        </div>
+        <div class="card-body">
+          <div class="grid-2">
+            <div class="field">
+              <label data-i18n="settings.model_install">Модель для установки</label>
+              <select id="set-model"></select>
+            </div>
+            <div class="field">
+              <label data-i18n="settings.model_installed">Установленные модели</label>
+              <select id="set-model-installed"></select>
+            </div>
+          </div>
+          <div class="field" style="margin-top:10px">
+            <label><span data-i18n="settings.temperature">Температура</span>: <b id="temp-val">0.30</b></label>
+            <input type="range" id="set-temp" min="0" max="1" step="0.01" value="0.3">
+            <span class="note" data-i18n="settings.temp_hint">0 — строго, 1 — разнообразно</span>
+          </div>
+          <div class="composer-row" style="margin-top:12px">
+            <button class="btn primary" id="btn-setup-all" data-i18n="settings.setup_all">Установить всё</button>
+            <button class="btn" id="btn-install-ollama" data-i18n="settings.only_service">Только сервис</button>
+            <button class="btn" id="btn-start-ollama" data-i18n="settings.start_server">Запустить сервер</button>
+            <button class="btn" id="btn-pull-model" data-i18n="settings.pull_model">Скачать модель</button>
+            <button class="btn" id="btn-delete-model" data-i18n="settings.delete_model">Удалить модель</button>
+          </div>
+          <div class="progress" id="setup-progress" style="margin-top:12px"><i></i></div>
+          <div class="status-line" id="setup-status"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="card-head"><span class="card-title" data-i18n="settings.data">Данные</span></div>
+        <div class="card-body">
+          <div class="composer-row">
+            <button class="btn" id="btn-open-data" data-i18n="settings.open_data">Открыть папку данных</button>
+            <button class="btn" id="btn-open-models" data-i18n="settings.open_models">Открыть папку моделей</button>
+            <span class="status-line" id="data-path"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="statusbar">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text" data-i18n="common.loading">загрузка ядра…</span>
+    <span class="grow"></span>
+    <span id="status-hint" data-i18n="common.hint">Ctrl+Enter — вычислить</span>
+  </footer>
+</div>
+
+<div class="overlay" id="onboarding" hidden>
+  <div class="dialog">
+    <h2 id="onb-title" data-i18n="onb.title">Первый запуск</h2>
+    <p class="lead" id="onb-lead" data-i18n="onb.lead">Проверю железо и предложу модель.</p>
+    <div class="spec" id="onb-spec" data-i18n="onb.detecting">Определяю конфигурацию…</div>
+    <div class="progress" id="onb-progress" hidden><i></i></div>
+    <div class="status-line" id="onb-status"></div>
+    <div class="actions">
+      <button class="btn" id="onb-later" data-i18n="onb.later">Позже</button>
+      <button class="btn primary" id="onb-accept" data-i18n="onb.accept">Установить и начать</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="overlay" id="graph-fullscreen" hidden>
+  <div class="graph-fullscreen-dialog">
+    <div class="graph-fullscreen-header">
+      <div class="fs-title" id="graph-title-fs"></div>
+      <button class="btn small" id="btn-close-graph" aria-label="Close">&#10005;</button>
+    </div>
+    <canvas id="graph-canvas-fs"></canvas>
+    <div class="graph-controls">
+      <button class="btn small" id="btn-fs-reset" data-i18n="graph.reset">Сбросить</button>
+      <button class="btn small" id="btn-fs-autoscale" data-i18n="graph.fit_y">Подогнать Y</button>
+      <span class="grow"></span>
+      <span class="graph-hint" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
+    </div>
+  </div>
+</div>
+
+
+<div class="boot-error" id="boot-error" hidden>
+  <h3>Startup error</h3>
+  <p>The interface failed to initialise. Copy the text below into a bug report.</p>
+  <pre></pre>
+  <button class="btn" onclick="location.reload()">Reload</button>
+</div>
+<script src="vendor/mathlive.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+
+  <!-- Fullscreen graph overlay -->
+  <div class="overlay hidden" id="graph-fs-overlay">
+    <div class="fs-container">
+      <div class="fs-head">
+        <h3 data-i18n="graph.fullscreen">График</h3>
+        <div class="fs-tools">
+          <button class="btn small" id="graph-fs-reset" data-i18n="graph.reset_view">Сбросить</button>
+          <button class="btn small" id="graph-fs-fit" data-i18n="graph.fit_y">Подогнать Y</button>
+          <button class="btn small primary" id="graph-fs-close" data-i18n="common.close">Закрыть</button>
+        </div>
+      </div>
+      <canvas id="graph-canvas-fs" width="1200" height="700"></canvas>
+    </div>
+  </div>
+
+</body>
+</html>
