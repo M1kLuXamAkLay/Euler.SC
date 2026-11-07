@@ -1,14 +1,3 @@
-/* ==========================================================================
-   Σuler.SC — тема Casio fx-991ES PLUS (розовый корпус, пиксельный шрифт)
-
-   Правила контраста (WCAG AA, минимум 4.5:1 для текста):
-     ink        #2e1c20 на paper #fffdf8 → 14.6:1
-     ink-dim    #6d4f56 на paper         →  6.2:1
-     lcd-text   #c8f0d8 на lcd  #1f2a24  → 12.7:1
-     lcd-dim    #8fc4a6 на lcd           →  6.4:1
-   Прошлая версия использовала #4a3b36 на #221d1a (1.57:1) — текст был невидим.
-   ========================================================================== */
-
 @font-face {
   font-family: 'Handjet'; font-style: normal; font-weight: 400; font-display: block;
   src: url('fonts/handjet-cyrillic-400.woff2') format('woff2');
@@ -39,14 +28,28 @@
   --lcd-text:    #c8f0d8;
   --lcd-dim:     #8fc4a6;
 
-  --key-num:     #8f4c56;
-  --key-num-hi:  #a05b66;
-  --key-fn:      #a8636f;
-  --key-fn-hi:   #b9747f;
-  --key-op:      #c9929d;
-  --key-op-hi:   #d7a5ae;
-  --key-ac:      #e8d5d9;
-  --key-ac-hi:   #f2e5e8;
+  /* Key fills taken from the palette swatch: pale pink, salmon, coral,
+     magenta and a lavender for the matrices. One dark label (#43305E, the
+     swatch's own background) on every key. Fills were fitted to the pairs that
+     touch on the grid: 1.10:1 apart, or 20 degrees of hue where lightness is
+     close, and every label reads at 4.5:1 or better. */
+  --key-fn:      #dfa4c2;
+  --key-fn-hi:   #e6b7cf;
+  --key-num:      #f6d8df;
+  --key-num-hi:   #f9e6eb;
+  --key-op:      #eba2a0;
+  --key-op-hi:   #efb7b5;
+  --key-ac:      #eacacf;
+  --key-ac-hi:   #f1dce0;
+  --key-const:      #e7cfe3;
+  --key-const-hi:   #f0e0ed;
+  --key-var:      #e38b82;
+  --key-var-hi:   #e89e97;
+  --key-mx:      #d3c8df;
+  --key-mx-hi:   #e0d8e8;
+  --key-run:      #e7cfe3;
+  --key-run-hi:   #f0e0ed;
+  --key-label:    #43305E;
   --key-text:    #ffffff;
   --key-text-d:  #3d1f25;
 
@@ -234,7 +237,7 @@ math-field.lcd-input::part(menu-toggle) { display: none; }
 
 .key {
   font-family: var(--font);
-  font-size: 21px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1;
   color: var(--key-text);
@@ -253,15 +256,15 @@ math-field.lcd-input::part(menu-toggle) { display: none; }
 .key:hover { background: var(--key-num-hi); }
 .key:active { transform: translateY(2px); border-bottom-width: 1px; }
 
-.key.k-fn  { background: var(--key-fn); font-size: 18px; }
+.key.k-fn  { font-size: 21px; }
 .key.k-fn:hover { background: var(--key-fn-hi); }
-.key.k-op  { background: var(--key-op); color: var(--key-text-d); font-size: 22px; }
+.key.k-op  { font-size: 25px; }
 .key.k-op:hover { background: var(--key-op-hi); }
-.key.k-ac  { background: var(--key-ac); color: var(--key-text-d); font-size: 18px; }
+.key.k-ac  { font-size: 21px; }
 .key.k-ac:hover { background: var(--key-ac-hi); }
-.key.k-eq  { background: var(--accent); font-size: 24px; }
+.key.k-eq  { font-size: 27px; }
 .key.k-eq:hover { background: var(--key-num-hi); }
-.key.k-num { font-size: 22px; }
+.key.k-num { font-size: 25px; }
 .key.k-fn.inverse { background: #8a4a8f; }
 .key.k-fn.inverse:hover { background: #a05ba5; }
 
@@ -350,7 +353,7 @@ textarea { resize: vertical; min-height: 56px; font-family: var(--mono); }
 /* ---------------------------------------------------------- кнопки */
 .btn {
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 17px;
   padding: 6px 12px;
   background: #f6eaec;
   color: var(--accent);
@@ -370,7 +373,7 @@ textarea { resize: vertical; min-height: 56px; font-family: var(--mono); }
 }
 .btn.primary:hover { background: var(--key-num-hi); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn.small { font-size: 14px; padding: 4px 8px; }
+.btn.small { font-size: 15px; padding: 4px 8px; }
 
 .op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 6px; }
 .row-tools { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -721,11 +724,11 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   white-space: normal;
   line-height: 1.1;
 }
-.keys-inline .key.k-fn { font-size: 13px; }
-.keys-inline .key.k-op { font-size: 16px; }
-.keys-inline .key.k-ac { font-size: 13px; }
-.keys-inline .key.k-eq { font-size: 16px; }
-.keys-inline .key.k-num { font-size: 15px; }
+.keys-inline .key.k-fn { font-size: 15px; }
+.keys-inline .key.k-op { font-size: 18px; }
+.keys-inline .key.k-ac { font-size: 15px; }
+.keys-inline .key.k-eq { font-size: 18px; }
+.keys-inline .key.k-num { font-size: 17px; }
 
 
 /* ---------------------------------------------------------- fullscreen graph */
@@ -741,15 +744,15 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   .grid-3 { grid-template-columns: 1fr 1fr; }
   .tab { font-size: 15px; padding: 6px 9px 7px; }
   .brand { font-size: 19px; }
-  .key { font-size: 17px; min-height: 34px; }
-  .key.k-fn { font-size: 15px; }
+  .key { font-size: 19px; min-height: 34px; }
+  .key.k-fn { font-size: 17px; }
 }
 
 @media (max-height: 700px) {
   .lcd { min-height: 96px; }
   math-field.lcd-input { font-size: 23px; min-height: 32px; }
   .lcd-out { font-size: 19px; }
-  .key { min-height: 32px; font-size: 18px; }
+  .key { min-height: 32px; font-size: 20px; }
 }
 
 
@@ -846,7 +849,7 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   :root:not([data-theme="light"]) .btn.primary { background: var(--accent); color: var(--accent-ink); }
   :root:not([data-theme="light"]) .composer { background: #241a1d; }
   :root:not([data-theme="light"]) { --graph-bg: #241c1e; }
-  :root:not([data-theme="light"])   :root:not([data-theme="light"]) .dialog { background: #241c1e; }
+  :root:not([data-theme="light"]) .dialog { background: #241c1e; }
   :root:not([data-theme="light"]) .keys-inline { background: #33262a; }
   :root:not([data-theme="light"]) .md code,
   :root:not([data-theme="light"]) .md pre { background: #33262a; color: var(--ink); }
@@ -915,6 +918,7 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
 /* ------------------------------------------------------------------ actions bar */
 .pane-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   padding: 6px 10px;
@@ -972,9 +976,9 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   min-height: 30px;
   font-size: 13px;
 }
-#mx-keys .key.k-num { font-size: 16px; }
+#mx-keys .key.k-num { font-size: 18px; }
 #mx-keys .key.k-op,
-#mx-keys .key.k-eq { font-size: 17px; }
+#mx-keys .key.k-eq { font-size: 19px; }
 
 /* Result line inside the matrix LCD */
 #mx-out {
@@ -995,7 +999,7 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   border-left: 3px solid var(--accent);
 }
 .tool-label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -1130,14 +1134,12 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   color: var(--note);
 }
 
-/* "=" is the run key on the calculator and matrix tabs */
+/* "=" is the run key on the calculator and matrix tabs. Fill and label come
+   from the group block at the end of this file: one palette for every key. */
 .key.k-eq {
-  background: var(--accent);
-  color: var(--accent-ink);
   font-size: 22px;
   font-weight: 800;
 }
-.key.k-eq:hover { filter: brightness(1.08); }
 
 /* Caveat under an answer, e.g. "roots are complex" */
 .solution-note {
@@ -1223,14 +1225,37 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   --body-dark:   #40232a;
   --body-deep:   #2c171c;
 
-  --key-num:     #8f4c56;
-  --key-num-hi:  #a05b66;
-  --key-fn:      #9a5762;
-  --key-fn-hi:   #ab6571;
-  --key-op:      #7e454f;
-  --key-op-hi:   #90525d;
-  --key-ac:      #6b3f47;
-  --key-ac-hi:   #7a4a53;
+  /* Muted fills, built for this background rather than borrowed from the
+     light theme. Two families: blue for the modifiers and the constants,
+     rose-wine for the structure, teal for arithmetic and the variable.
+
+     The modifiers are a pale slate blue (224 degrees, saturation 0.18): the
+     row of Shift/Alt/AC/Del used to sit 1.12:1 from the functions below it,
+     two nearly identical maroons. It now clears them by 1.65:1 and by 109
+     degrees of hue.
+
+     Arithmetic (+ - x / %) and the variable key (x, <, >, <=, >=) share one
+     teal, two lightness steps apart so the rows still read separately.
+
+     Labels stay white at 4.5:1 or better; every key clears the body colour by
+     1.25:1. */
+  --key-fn:    #723e56;
+  --key-fn-hi: #7b435c;
+  --key-num:   #8b4b59;
+  --key-num-hi: #94505f;
+  --key-op:    #138178;
+  --key-op-hi: #158b82;
+  --key-ac:    #636f8f;
+  --key-ac-hi: #687597;
+  --key-const: #4e7288;
+  --key-const-hi: #537990;
+  --key-var:   #1a685f;
+  --key-var-hi: #1c736a;
+  --key-mx:    #4c4c7b;
+  --key-mx-hi: #515183;
+  --key-run:   #4e7288;
+  --key-run-hi: #537990;
+  --key-label: #ffffff;
   --key-text:    #fbeeef;
   --key-text-d:  #f0dadd;
 }
@@ -1242,14 +1267,23 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
     --body-dark:   #40232a;
     --body-deep:   #2c171c;
 
-    --key-num:     #8f4c56;
-    --key-num-hi:  #a05b66;
-    --key-fn:      #9a5762;
-    --key-fn-hi:   #ab6571;
-    --key-op:      #7e454f;
-    --key-op-hi:   #90525d;
-    --key-ac:      #6b3f47;
-    --key-ac-hi:   #7a4a53;
+    --key-fn:    #723e56;
+    --key-fn-hi: #7b435c;
+    --key-num:   #8b4b59;
+    --key-num-hi: #94505f;
+    --key-op:    #138178;
+    --key-op-hi: #158b82;
+    --key-ac:    #636f8f;
+    --key-ac-hi: #687597;
+    --key-const: #4e7288;
+    --key-const-hi: #537990;
+    --key-var:   #1a685f;
+    --key-var-hi: #1c736a;
+    --key-mx:    #4c4c7b;
+    --key-mx-hi: #515183;
+    --key-run:   #4e7288;
+    --key-run-hi: #537990;
+    --key-label: #ffffff;
     --key-text:    #fbeeef;
     --key-text-d:  #f0dadd;
   }
@@ -1556,4 +1590,250 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
 :root[data-theme="dark"] .titlebar { background: var(--body-dark); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .titlebar { background: var(--body-dark); }
+}
+
+/* First-run card: the settings card at a narrower width, colours from the theme */
+.onb-card { width: min(440px, 92vw); max-height: 88vh; }
+.onb-card .card-body { display: flex; flex-direction: column; gap: 10px; }
+.onb-lead { margin: 0; font-size: 14px; color: var(--ink-dim); }
+.onb-spec {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 2px solid var(--paper-line);
+  padding: 10px 14px;
+  font-size: 18px;
+  color: var(--ink);
+}
+.onb-card .card-head { display: flex; align-items: center; gap: 10px; }
+.onb-state {
+  margin-left: auto; padding: 2px 8px;
+  font-size: 13px; font-weight: 700;
+  border: 2px solid var(--paper-line); color: var(--ink-dim);
+  white-space: nowrap;
+}
+.onb-state[data-state="done"] { color: var(--accent); border-color: var(--accent); }
+.onb-state[data-state="failed"] { color: var(--err); border-color: var(--err); }
+.onb-row { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: baseline; }
+.onb-key { color: var(--ink-dim); }
+.onb-val { color: var(--accent); font-weight: 600; overflow-wrap: anywhere; }
+.onb-reason { margin: 4px 0 0; font-size: 13px; color: var(--ink-dim); }
+.onb-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* Several functions on one graph: rows with a colour swatch, a full-analysis marker and remove */
+.fn-list { display: flex; flex-direction: column; gap: 8px; }
+.fn-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px 4px 0;
+  border: 2px solid var(--paper-line);
+  background: var(--paper);
+}
+.fn-row.is-active { border-color: var(--accent); }
+.fn-swatch { align-self: stretch; min-height: 36px; }
+.fn-row math-field.mf-input { min-width: 0; }
+.fn-mark,
+.fn-remove {
+  width: 34px;
+  height: 34px;
+  border: 2px solid var(--paper-line);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fn-mark.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.fn-remove:disabled { opacity: .4; cursor: default; }
+.fn-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.fn-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.fn-stripe { width: 6px; height: 24px; flex: none; }
+.fn-tex { font-size: 16px; line-height: 1.2; }
+.graph-card .graph-wrap { position: relative; flex: 1 1 0; min-height: 0; }
+.graph-card #graph-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.kfrac { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; font-size: 0.95em; }
+.kfrac i { font-style: normal; display: block; padding: 0 3px; }
+.kfrac i:first-child { border-bottom: 2px solid currentColor; padding-bottom: 2px; }
+
+.analysis-pane { gap: 10px; }
+.analysis-top {
+  flex: 3.2 1 0;
+  min-height: 260px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.analysis-top > .card { min-height: 0; margin: 0; }
+.analysis-input > .card-body { overflow-y: auto; }
+.result-card { flex: 2 1 0; min-height: 110px; margin: 0; }
+.result-card > .card-body { overflow-y: auto; }
+.fn-legend {
+  flex: none;
+  max-height: 96px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  border-top: 2px solid var(--paper-line);
+  gap: 6px 16px;
+}
+.fs-legend { font-size: 15px; }
+@media (max-width: 900px) {
+  .analysis-pane { overflow-y: auto; }
+  .analysis-top { flex: none; grid-template-columns: minmax(0, 1fr); }
+  .graph-card { height: 320px; }
+  .analysis-input { min-height: 0; }
+  .result-card { flex: none; height: 240px; }
+}
+
+/* Keyboard symbols: operators, comparisons and the decimal separators are read at a glance */
+.key.k-op { font-size: 30px; }
+.key.k-sym { font-size: 32px; }
+.key.k-var { font-size: 23px; }
+.key.k-eq, #mx-keys .key.k-eq, .keys-inline .key.k-eq {
+  font-size: 42px;
+  /* The display face draws a heavy "=" that reads as one solid bar; the
+     monospace face keeps the two strokes apart at this size. */
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+/* Comparison signs are lighter than the rest of the key captions */
+.key.k-sym {
+  font-family: "Segoe UI Symbol", "DejaVu Sans", var(--font);
+  font-weight: 500;
+}
+#mx-keys .key.k-op { font-size: 24px; }
+#mx-keys .key.k-sym { font-size: 27px; }
+.keys-inline .key.k-op { font-size: 20px; }
+.keys-inline .key.k-sym { font-size: 21px; }
+.keys-inline .key.k-eq { font-size: 30px; }
+.key.k-fn { font-weight: 800; }
+.key.k-var { font-weight: 800; }
+
+.onb-note { margin: 0; font-size: 13px; color: var(--ink-dim); }
+#onb-status:empty { display: none; }
+
+/* The matrix input is drawn by the field itself, not by the LCD frame around it */
+#mx-input.lcd-input,
+#mx-input.lcd-input:focus,
+#mx-input.lcd-input:focus-within {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+#mx-input.lcd-input::part(container) {
+  border: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ---- matrix calculator: the editor fills the LCD block, not a small box ---- */
+#view-matrix .lcd-input {
+  flex: 1 1 auto;
+  min-height: 96px;
+  font-size: 32px;
+  line-height: 1.25;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0;
+  --mathfield-border: 0;
+  --mathfield-border-color: transparent;
+  --mathfield-outline: transparent;
+}
+#view-matrix .lcd-input::part(container),
+math-field.lcd-input::part(container),
+math-field.lcd-input::part(content) {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0;
+}
+#view-matrix .lcd-grow .lcd-out { flex: 0 0 auto; min-height: 96px; }
+
+/* ---- first-run: note and buttons share one row ---- */
+.onb-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.onb-footer .onb-note { flex: 1 1 150px; margin: 0; }
+.onb-footer .onb-actions { flex: 0 0 auto; margin-left: auto; }
+
+/* ---- a cancel button that reads as an interruption, not as another action ---- */
+.btn.danger { border-color: var(--err); color: var(--err); }
+.btn.danger:hover { background: color-mix(in srgb, var(--err) 14%, transparent); }
+
+/* ==========================================================================
+   KEY PADS: one fill per family, one label colour
+   --------------------------------------------------------------------------
+   Ordered by role: modifiers, digits, arithmetic, functions, constants,
+   variable and comparisons, saved matrices, run.
+
+   Every keypad in both themes uses one white label. The previous build gave
+   the arithmetic and comparison keys a dark label while the rest were white,
+   and the two darkest fills read as grey keys.
+   ========================================================================== */
+.key.k-ac    { background: var(--key-ac);    color: var(--key-label); }
+.key.k-num   { background: var(--key-num);   color: var(--key-label); }
+.key.k-op    { background: var(--key-op);    color: var(--key-label); }
+.key.k-fn    { background: var(--key-fn);    color: var(--key-label); }
+.key.k-const { background: var(--key-const); color: var(--key-label); }
+.key.k-var   { background: var(--key-var);   color: var(--key-label); }
+.key.k-mx    { background: var(--key-mx);    color: var(--key-label); }
+.key.k-eq    { background: var(--key-const); color: var(--key-label); }
+
+.key.k-ac:hover    { background: var(--key-ac-hi); }
+.key.k-num:hover   { background: var(--key-num-hi); }
+.key.k-op:hover    { background: var(--key-op-hi); }
+.key.k-fn:hover    { background: var(--key-fn-hi); }
+.key.k-const:hover { background: var(--key-const-hi); }
+.key.k-var:hover   { background: var(--key-var-hi); }
+.key.k-mx:hover    { background: var(--key-mx-hi); }
+.key.k-eq:hover    { background: var(--key-const-hi); }
+
+/* Comparison signs sit in the variable group but stay light in weight */
+.key.k-var.k-sym { font-weight: 500; }
+
+/* A 1 px rim in the page colour separates keys whose fills are close in
+   lightness: the palette guarantees 1.12:1 between neighbours, and the rim
+   does the rest. */
+#keys .key,
+#mx-keys .key,
+.keys-inline .key {
+  outline: 1px solid color-mix(in srgb, var(--body-deep) 55%, transparent);
+  outline-offset: -1px;
+}
+/* The run key keeps a lighter rim: it starts a calculation and shares its fill
+   with the constants beside it. */
+.key.k-eq { outline-color: color-mix(in srgb, var(--body-deep) 20%, #ffffff 80%); }
+
+/* ---- hardware card: same rows and pill as the first-run window ----
+   The profile used to print in the monospace result face, which made the
+   settings card and the wizard look like two different screens. Both now use
+   the pixel font and the key/value grid. */
+/* The pill sits at the far right of the card head. On a narrow window the
+   title and the pill wrap onto two lines instead of the pill running off. */
+.card-head { flex-wrap: wrap; }
+.hw-spec { padding: 0; border: 0; gap: 4px; }
+.card-head .onb-state { margin-left: auto; flex: 0 0 auto; }
+/* A failed probe keeps the pixel face; .result.error would switch it back. */
+.hw-spec.error {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--err);
+  border: 2px solid var(--err);
+  padding: 8px 12px;
 }

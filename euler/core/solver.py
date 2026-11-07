@@ -283,6 +283,9 @@ def _format_set_latex(solution, var_name: str) -> str:
         return f"{var_name} \\in \\left{lb}{left};\\; {right}\\right{rb}"
 
     if isinstance(solution, sp.Union):
+        if all(isinstance(part, sp.Interval) for part in solution.args):
+            bodies = [_format_set_latex(part, var_name).split(" \\in ", 1)[-1] for part in solution.args]
+            return f"{var_name} \\in " + " \\cup ".join(bodies)
         parts = [_format_set_latex(part, var_name) for part in solution.args]
         # A union of arithmetic progressions reads better one per line than
         # as a single \cup chain a metre long
@@ -336,6 +339,9 @@ def _format_set(solution, var_name: str) -> str:
         return f"{var_name} \u2208 {lb}{left}; {right}{rb}"
 
     if isinstance(solution, sp.Union):
+        if all(isinstance(part, sp.Interval) for part in solution.args):
+            bodies = [_format_set(part, var_name).split(" \u2208 ", 1)[-1] for part in solution.args]
+            return f"{var_name} \u2208 " + " \u222a ".join(bodies)
         return "\n".join(_format_set(part, var_name) for part in solution.args)
 
     if isinstance(solution, sp.Intersection):
@@ -429,6 +435,39 @@ def _format_matrix(matrix: sp.MatrixBase) -> str:
     )
 
 
+def _trig_substitution_solution(expression, var_name: str):
+    """Solve ``a*sin^n(x) + … = 0`` by solving for the inner function first.
+
+    ``sin^2(x) - 5sin(x) + 6 = 0`` becomes ``t^2 - 5t + 6 = 0`` with ``t = sin(x)``.
+    SymPy's ``solveset`` returns a ``ConditionSet`` for many of these, which used
+    to surface as "cannot parse the expression". A root outside [-1; 1] means no
+    real solution, not ``asin(2)``.
+    """
+    inner = sorted(expression.atoms(sp.sin, sp.cos), key=str)
+    if len(inner) != 1:
+        return None
+    function = inner[0]
+    symbol = sp.Dummy("t", real=True)
+    try:
+        polynomial = sp.Poly(sp.expand(expression.subs(function, symbol)), symbol)
+    except (sp.PolynomialError, ValueError):
+        return None
+    if polynomial.degree() < 1:
+        return None
+
+    values = [root for root in sp.roots(polynomial, symbol) if root.is_real]
+    if not values:
+        return None
+
+    x = sp.Symbol(var_name, real=True)
+    solved = sp.EmptySet
+    for value in values:
+        if not (-1 <= value <= 1):
+            continue
+        solved = sp.Union(solved, sp.solveset(sp.Eq(function, value), x, domain=sp.S.Reals))
+    return solved
+
+
 def solve_equation(text: str, matrices: dict | None = None) -> dict:
     """Solve an equation or inequality with respect to its primary variable."""
     parts = _split_relation(text)
@@ -455,18 +494,39 @@ def solve_equation(text: str, matrices: dict | None = None) -> dict:
             solution = sp.solve_univariate_inequality(relation, var, relational=False)
             return ok(_format_set(solution, var_name), _format_set_latex(solution, var_name))
 
-        solution = sp.solveset(relation, var, domain=sp.S.Reals)
+        try:
+            solution = sp.solveset(relation, var, domain=sp.S.Reals)
+        except (sp.PolynomialError, ValueError, TypeError, NotImplementedError):
+            solution = sp.ConditionSet(var, relation, sp.S.Reals)
         note = None
+
+        if isinstance(solution, sp.ConditionSet) or solution is sp.S.EmptySet:
+            substituted = _trig_substitution_solution(sp.expand(lhs - rhs), var_name)
+            if substituted is not None:
+                solution = substituted
+                if substituted is sp.S.EmptySet:
+                    return err("ExprError.no_solution")
 
         if isinstance(solution, sp.ConditionSet) or solution is sp.S.EmptySet:
             # Nothing real. Complex roots still exist for things like x^2+1=0,
             # but a student looking at sin(x)=2 needs to be told the answer is
             # "no real solutions", not handed asin(2) as if it were a number.
-            complex_solution = sp.solveset(relation, var, domain=sp.S.Complexes)
+            try:
+                complex_solution = sp.solveset(relation, var, domain=sp.S.Complexes)
+            except (sp.PolynomialError, ValueError, TypeError, NotImplementedError):
+                complex_solution = sp.ConditionSet(var, relation, sp.S.Complexes)
             if (not isinstance(complex_solution, sp.ConditionSet)
                     and complex_solution is not sp.S.EmptySet):
                 solution = complex_solution
                 note = "solution.complex"
+
+        # An empty set is a real answer ("no real solutions"), but it must not
+        # arrive as ok=True with the text "ExprError.no_solution": the interface
+        # then prints the raw key instead of a message.
+        # ``is`` only: sp.EmptySet is an instance, so isinstance() raises
+        # TypeError and every equation would report not_solvable.
+        if solution is sp.S.EmptySet:
+            return err("ExprError.no_solution")
 
         return ok(_format_set(solution, var_name),
                   _format_set_latex(solution, var_name),

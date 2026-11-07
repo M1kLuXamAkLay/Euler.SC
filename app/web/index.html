@@ -133,43 +133,33 @@
 
   <!-- ============================ АНАЛИЗ ФУНКЦИИ ============================ -->
   <section class="view" id="view-analysis">
-    <div class="pane">
-      <div class="card" style="flex:0 0 auto">
-        <div class="card-head">
-          <span class="card-title" data-i18n="analysis.title">Анализ функции</span>
-          <span class="card-note" data-i18n="analysis.hint">пределы, экстремумы, асимптоты</span>
-        </div>
-        <div class="card-body">
-          <div class="grid-2">
-            <div class="field">
-              <label data-i18n="calculus.fn">Функция</label>
-              <math-field class="mf-input" id="an-fn">x^3-3x</math-field>
+    <div class="pane analysis-pane">
+      <div class="analysis-top">
+        <div class="card analysis-input">
+          <div class="card-head">
+            <span class="card-title" data-i18n="analysis.title">Анализ функции</span>
+            <span class="card-note" data-i18n="analysis.hint">пределы, экстремумы, асимптоты</span>
+          </div>
+          <div class="card-body">
+            <div class="fn-list" id="fn-list"></div>
+            <div class="composer-row" style="margin-top:8px">
+              <button class="btn small" id="btn-add-fn" data-i18n="analysis.add_fn">+ Добавить функцию</button>
+              <button class="btn small" id="btn-kb-an" data-i18n="calc.keyboard">⌨ Клавиатура</button>
             </div>
-            <div class="field">
+            <div class="keys-inline" id="kb-an" hidden></div>
+            <div class="field" style="margin-top:10px">
               <label data-i18n="analysis.interval">Отрезок для экстремумов</label>
               <math-field class="mf-input" id="an-interval">-2; 2</math-field>
             </div>
-          </div>
-          <div class="composer-row" style="margin-top:8px">
-            <button class="btn small" id="btn-kb-an" data-i18n="calc.keyboard">⌨ Клавиатура</button>
-          </div>
-          <div class="keys-inline" id="kb-an" hidden></div>
-          <div class="op-grid" style="margin-top:10px">
-            <button class="btn primary" id="btn-analyze" data-i18n="analysis.full">Full analysis</button>
-            <button class="btn" id="btn-graph" data-i18n="analysis.graph">Plot</button>
-            <button class="btn" id="btn-autoscale" data-i18n="analysis.autoscale">Fit Y</button>
-            <button class="btn" id="btn-graph-fullscreen">⛶ Fullscreen graph</button>
-            <button class="btn" id="btn-clear-analysis" data-i18n="common.clear">Clear</button>
+            <div class="op-grid" style="margin-top:10px">
+              <button class="btn primary" id="btn-analyze" data-i18n="analysis.full">Полный анализ</button>
+              <button class="btn" id="btn-graph-fullscreen" data-i18n="analysis.fullscreen">⛶ Во весь экран</button>
+              <button class="btn" id="btn-clear-analysis" data-i18n="common.clear">Очистить</button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="grid-2" style="flex:1; min-height:0; margin-top:10px">
-        <div class="card">
-          <div class="card-head"><span class="card-title" data-i18n="common.result">Результат</span></div>
-          <div class="card-body"><div class="result" id="analysis-out"></div></div>
-        </div>
-        <div class="card">
+        <div class="card graph-card">
           <div class="card-head">
             <span class="card-title" data-i18n="analysis.graph">График</span>
             <span class="card-note" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
@@ -178,6 +168,11 @@
             <canvas id="graph-canvas"></canvas>
           </div>
         </div>
+      </div>
+
+      <div class="card result-card">
+        <div class="card-head"><span class="card-title" data-i18n="common.result">Результат</span></div>
+        <div class="card-body"><div class="result" id="analysis-out"></div></div>
       </div>
     </div>
   </section>
@@ -281,6 +276,7 @@
           <div class="pane-actions">
             <button class="btn small" id="btn-export-pdf" data-i18n="export.pdf">PDF</button>
             <button class="btn small" id="btn-export-tex" data-i18n="export.latex">LaTeX</button>
+            <button class="btn small" id="btn-open-exports" data-i18n="export.open_folder">Папка экспорта</button>
             <span class="grow"></span>
             <span class="status-line" id="export-status"></span>
           </div>
@@ -354,11 +350,12 @@
 
       <div class="card" style="margin-top:10px">
         <div class="card-head">
-          <span class="card-title" data-i18n="settings.hardware">Комплектующие</span>
-          <span class="card-note" data-i18n="settings.hardware_note">определяется один раз</span>
+          <span class="card-title" data-i18n="settings.hardware">Технические характеристики</span>
+          <span class="onb-state" id="hw-state" data-state="detecting"
+                data-i18n="onb.detecting">Определяю конфигурацию…</span>
         </div>
         <div class="card-body">
-          <div class="result" id="hw-out"></div>
+          <div class="onb-spec hw-spec" id="hw-out"></div>
           <div class="composer-row" style="margin-top:10px">
             <button class="btn" id="btn-hw-rescan" data-i18n="settings.rescan">Определить заново</button>
           </div>
@@ -388,8 +385,9 @@
           </div>
           <div class="composer-row" style="margin-top:12px">
             <button class="btn primary" id="btn-setup-all" data-i18n="settings.setup_all">Установить всё</button>
+            <button class="btn" id="btn-setup-cancel" hidden data-i18n="setup.cancel">Отменить</button>
             <button class="btn" id="btn-install-ollama" data-i18n="settings.only_service">Только сервис</button>
-            <button class="btn" id="btn-start-ollama" data-i18n="settings.start_server">Запустить сервер</button>
+            <button class="btn" id="btn-start-ollama" data-i18n="settings.start_service">Запустить сервис</button>
             <button class="btn" id="btn-pull-model" data-i18n="settings.pull_model">Скачать модель</button>
             <button class="btn" id="btn-delete-model" data-i18n="settings.delete_model">Удалить модель</button>
           </div>
@@ -420,15 +418,24 @@
 </div>
 
 <div class="overlay" id="onboarding" hidden>
-  <div class="dialog">
-    <h2 id="onb-title" data-i18n="onb.title">Первый запуск</h2>
-    <p class="lead" id="onb-lead" data-i18n="onb.lead">Проверю железо и предложу модель.</p>
-    <div class="spec" id="onb-spec" data-i18n="onb.detecting">Определяю конфигурацию…</div>
-    <div class="progress" id="onb-progress" hidden><i></i></div>
-    <div class="status-line" id="onb-status"></div>
-    <div class="actions">
-      <button class="btn" id="onb-later" data-i18n="onb.later">Позже</button>
-      <button class="btn primary" id="onb-accept" data-i18n="onb.accept">Установить и начать</button>
+  <div class="card onb-card" role="dialog" aria-labelledby="onb-title">
+    <div class="card-head">
+      <span class="card-title" id="onb-title" data-i18n="onb.title">Первый запуск</span>
+      <span class="onb-state" id="onb-state" data-state="detecting" data-i18n="onb.detecting">Определяю конфигурацию…</span>
+    </div>
+    <div class="card-body">
+      <p class="onb-lead" id="onb-lead" data-i18n="onb.lead">Определение параметров системы и подбор подходящей языковой модели.</p>
+      <div class="onb-spec" id="onb-spec"></div>
+      <div class="progress" id="onb-progress" hidden><i></i></div>
+      <div class="status-line" id="onb-status"></div>
+      <div class="onb-footer">
+        <span class="onb-note" data-i18n="settings.hardware_note">Определяется при первом запуске</span>
+        <div class="onb-actions">
+          <button class="btn" id="onb-later" data-i18n="onb.later">Позже</button>
+          <button class="btn" id="onb-cancel" hidden data-i18n="setup.cancel">Отменить</button>
+          <button class="btn primary" id="onb-accept" data-i18n="onb.accept">Установить и начать</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -441,9 +448,11 @@
       <button class="btn small" id="btn-close-graph" aria-label="Close">&#10005;</button>
     </div>
     <canvas id="graph-canvas-fs"></canvas>
+    <div class="fn-legend fs-legend" id="graph-legend-fs"></div>
     <div class="graph-controls">
       <button class="btn small" id="btn-fs-reset" data-i18n="graph.reset">Сбросить</button>
-      <button class="btn small" id="btn-fs-autoscale" data-i18n="graph.fit_y">Подогнать Y</button>
+      <button class="btn small" id="btn-fs-pdf" data-i18n="export.graph_pdf">PDF</button>
+      <span class="status-line" id="graph-fs-status"></span>
       <span class="grow"></span>
       <span class="graph-hint" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
     </div>
@@ -462,20 +471,6 @@
 <script src="i18n.js"></script>
 <script src="app.js"></script>
 
-  <!-- Fullscreen graph overlay -->
-  <div class="overlay hidden" id="graph-fs-overlay">
-    <div class="fs-container">
-      <div class="fs-head">
-        <h3 data-i18n="graph.fullscreen">График</h3>
-        <div class="fs-tools">
-          <button class="btn small" id="graph-fs-reset" data-i18n="graph.reset_view">Сбросить</button>
-          <button class="btn small" id="graph-fs-fit" data-i18n="graph.fit_y">Подогнать Y</button>
-          <button class="btn small primary" id="graph-fs-close" data-i18n="common.close">Закрыть</button>
-        </div>
-      </div>
-      <canvas id="graph-canvas-fs" width="1200" height="700"></canvas>
-    </div>
-  </div>
 
 </body>
 </html>

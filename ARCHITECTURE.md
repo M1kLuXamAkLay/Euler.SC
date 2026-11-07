@@ -1,6 +1,6 @@
 # Σuler.SC — Architecture Documentation
 
-**Version:** 5.0.3  
+**Version:** 5.1.17  
 **Last Updated:** 11.04.2026
 
 ## Overview

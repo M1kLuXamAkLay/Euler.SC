@@ -27,7 +27,8 @@ const state = {
   busy: false,
   history: [],
   pendingImage: null,
-  graphExprs: ['x^3-3x'],
+  fnMarked: 0,
+  series: [],
   theme: 'auto',
   lastSolution: null,
   // ALT history: the computed form and whether an alternative is showing
@@ -106,7 +107,6 @@ const PARAMS = {
   analyze: ['expression', 'interval'],
   limit: ['expression', 'point', 'direction'],
   plot: ['equations', 'x_min', 'x_max', 'points'],
-  autoscale: ['equations', 'x_min', 'x_max'],
   matrix_op: ['operation', 'first', 'second', 'extra'],
   matrix_save: ['name', 'grid'],
   matrix_delete: ['name'],
@@ -121,6 +121,9 @@ const PARAMS = {
   ai_ask: ['task', 'image_b64', 'model'],
   export_pdf: ['kind', 'payload', 'filename'],
   export_latex: ['kind', 'payload', 'filename'],
+  export_graph_pdf: ['payload', 'filename'],
+  open_exports_dir: [],
+  ollama_cancel: [],
   reference: ['query', 'area', 'level'],
 };
 
@@ -266,6 +269,83 @@ async function guarded(selector, action) {
  *  3. Spacing macros (`~`, `\,`, `\;`, `\quad`) carry no arithmetic meaning and
  *     must disappear, or they break every expression typed with the keypad.
  */
+/**
+ * Rewrite ``\log_{b}(x)`` and ``\lg_{b}(x)`` as ``(log(x)/log(b))``.
+ *
+ * The argument is scanned with bracket counting, not a regular expression: the
+ * base can sit on a nested call such as ``\log_{2}(\sin(x)+1)``, which a
+ * single-level pattern would cut in half.
+ */
+function expandLogBases(input) {
+  // \log and \lg are already plain here: the named-macro pass runs first.
+  // MathLive writes the base either braced (\log_{9}) or bare (\log_9), and a
+  // bare one used to survive into "log_9(9)", which the engine rejects as an
+  // unknown name. Both forms are accepted.
+  const macro = /(?:^|[^a-zA-Z\\])(log10|log|lg)\s*_/g;
+  let out = '';
+  let rest = input;
+
+  for (;;) {
+    macro.lastIndex = 0;
+    const match = macro.exec(rest);
+    if (!match) return out + rest;
+
+    const nameEnd = match.index + match[0].length;
+    let base;
+    let cursor;
+
+    if (rest[nameEnd] === '{') {
+      let depth = 0;
+      let i = nameEnd;
+      let baseEnd = -1;
+      for (; i < rest.length; i += 1) {
+        if (rest[i] === '{') depth += 1;
+        else if (rest[i] === '}') {
+          depth -= 1;
+          if (depth === 0) { baseEnd = i; break; }
+        }
+      }
+      if (baseEnd < 0) return out + rest;
+      base = rest.slice(nameEnd + 1, baseEnd);
+      cursor = baseEnd + 1;
+    } else {
+      // a bare base: a number, a single letter, or one macro such as \pi
+      const bare = /^(?:\\[a-zA-Z]+|\d+(?:\.\d+)?|[a-zA-Z])/.exec(rest.slice(nameEnd));
+      if (!bare) return out + rest;
+      base = bare[0];
+      cursor = nameEnd + base.length;
+    }
+
+    while (rest[cursor] === ' ') cursor += 1;
+
+    let argument;
+    let after;
+    if (rest[cursor] === '(') {
+      let parens = 0;
+      let j = cursor;
+      for (; j < rest.length; j += 1) {
+        if (rest[j] === '(') parens += 1;
+        else if (rest[j] === ')') {
+          parens -= 1;
+          if (parens === 0) { j += 1; break; }
+        }
+      }
+      argument = rest.slice(cursor + 1, j - 1);
+      after = j;
+    } else {
+      const token = /^-?\d+(?:\.\d+)?|^[a-zA-Z\\]+/.exec(rest.slice(cursor));
+      if (!token) return out + rest;
+      argument = token[0];
+      after = cursor + argument.length;
+    }
+
+    out += rest.slice(0, match.index) + match[0].slice(0, match[0].indexOf(match[1]));
+    out += `(log(${argument})/log(${base}))`;
+    rest = rest.slice(after);
+  }
+}
+
+
 function latexToPlain(latex) {
   if (!latex) return '';
   let s = String(latex);
@@ -324,6 +404,13 @@ function latexToPlain(latex) {
   for (const [from, to] of simple) {
     s = s.split(from).join(to);
   }
+
+  // --- logarithms with a base ----------------------------------------------
+  // MathLive writes log base 2 as \log_{2}(8). The generic subscript rule further
+  // down deletes "_{2}", which turned every logarithm into the natural one. The
+  // base becomes a ratio of logarithms: log_2(8) = log(8)/log(2).
+  // Runs after \left and \right are gone, so the argument is a plain bracket.
+  s = expandLogBases(s);
 
   // --- function powers ------------------------------------------------------
   // MathLive writes "sin squared" as \sin^{2}(x). The exponent must move onto
@@ -463,7 +550,7 @@ const FUNCS = {
   cos: { tex: '\\cos(#?)',  inv: '\\arccos(#?)',  label: 'cos', invLabel: 'cos\u207b\u00b9' },
   tan: { tex: '\\tan(#?)',  inv: '\\arctan(#?)',  label: 'tan', invLabel: 'tan\u207b\u00b9' },
   ln:  { tex: '\\ln(#?)',   inv: 'e^{#?}',        label: 'ln',  invLabel: 'e\u02e3' },
-  log: { tex: '\\log(#?)',  inv: '10^{#?}',       label: 'log', invLabel: '10\u02e3' },
+  log: { tex: '\\log_{#?}(#?)', inv: '10^{#?}',    label: 'log', invLabel: '10\u02e3' },
 };
 
 /* Layout: [label, action, class]. No small labels above buttons. */
@@ -483,11 +570,11 @@ const FUNCS = {
 const BASE_LAYOUT = [
   ['SHIFT', 'cmd:shift', 'k-ac'], ['ALT', 'cmd:alt', 'k-ac'],
   ['AC', 'cmd:ac', 'k-ac'], ['DEL', 'cmd:del', 'k-ac'],
-  ['%', 'tex:\\%', 'k-op'], ['1/x', 'tex:\\frac{1}{#?}', 'k-fn'],
+  ['%', 'tex:\\%', 'k-op'], ['html:<span class="kfrac"><i>1</i><i>x</i></span>', 'tex:\\frac{1}{#?}', 'k-fn'],
 
   ['x\u00b2', 'tex:^{2}', 'k-fn'], ['x\u02b8', 'tex:^{#?}', 'k-fn'],
   ['\u221a', 'tex:\\sqrt{#?}', 'k-fn'], ['\u221b', 'tex:\\sqrt[3]{#?}', 'k-fn'],
-  ['a/b', 'tex:\\frac{#?}{#?}', 'k-fn'], ['n!', 'tex:!', 'k-fn'],
+  ['html:<span class="kfrac"><i>a</i><i>b</i></span>', 'tex:\\frac{#?}{#?}', 'k-fn'], ['n!', 'tex:!', 'k-fn'],
 
   ['sin', 'func:sin', 'k-fn'], ['cos', 'func:cos', 'k-fn'], ['tan', 'func:tan', 'k-fn'],
   ['ln', 'func:ln', 'k-fn'], ['log', 'func:log', 'k-fn'],
@@ -498,19 +585,19 @@ const BASE_LAYOUT = [
   ['\u00d710\u207f', 'tex:\\times10^{#?}', 'k-fn'],
 
   ['7', 'num:7', 'k-num'], ['8', 'num:8', 'k-num'], ['9', 'num:9', 'k-num'],
-  ['\u00d7', 'tex:\\times', 'k-op'], ['\u00f7', 'tex:\\div', 'k-op'],
-  [',', 'tex:,', 'k-num'],
+  ['\u00d7', 'tex:\\times', 'k-op k-sym'], ['\u00f7', 'tex:\\div', 'k-op k-sym'],
+  [',', 'tex:,', 'k-num k-sym'],
 
   ['4', 'num:4', 'k-num'], ['5', 'num:5', 'k-num'], ['6', 'num:6', 'k-num'],
-  ['\u2212', 'tex:-', 'k-op'], ['+', 'tex:+', 'k-op'],
+  ['\u2212', 'tex:-', 'k-op k-sym'], ['+', 'tex:+', 'k-op k-sym'],
   ['Ans', 'cmd:ans', 'k-fn'],
 
   ['1', 'num:1', 'k-num'], ['2', 'num:2', 'k-num'], ['3', 'num:3', 'k-num'],
   ['0', 'num:0', 'k-num'], ['.', 'tex:.', 'k-num'],
   ['=', 'cmd:eq', 'k-eq'],
 
-  ['x', 'tex:x', 'k-var'], ['<', 'tex:<', 'k-var'], ['>', 'tex:>', 'k-var'],
-  ['\u2264', 'tex:\\le', 'k-var'], ['\u2265', 'tex:\\ge', 'k-var'],
+  ['x', 'tex:x', 'k-var'], ['<', 'tex:<', 'k-var k-sym'], ['>', 'tex:>', 'k-var k-sym'],
+  ['\u2264', 'tex:\\le', 'k-var k-sym'], ['\u2265', 'tex:\\ge', 'k-var k-sym'],
   ['|x|', 'tex:\\left|#?\\right|', 'k-fn'],
 ];
 
@@ -525,6 +612,36 @@ const MATRIX_ROWS = [
 ];
 
 /**
+ * The matrix keypad: the numeric and function rows of the base layout with the
+ * variable row folded in, so every row still holds six keys.
+ *
+ * Filtering keys out of the base layout left short rows (the comma and the
+ * whole comparison row disappeared), and the grid pulled the next row's keys up
+ * into the gap: "7 8 9 × ÷ 4" ended up sharing one line. Explicit rows keep the
+ * digit block, the operator column and the function block aligned exactly as on
+ * the other tabs.
+ */
+function matrixLayout() {
+  // Built from the base layout by position, not by action string: the actions
+  // contain LaTeX ("tex:\\times") and comparing them by hand is error-prone.
+  const at = (index) => BASE_LAYOUT[index];
+  const row = (from, to) => BASE_LAYOUT.slice(from, to);
+
+  return [
+    ...row(0, 6),                                     // modifiers, %, 1/x
+    ...row(6, 12),                                    // powers, roots, fractions
+    ...row(12, 18),                                   // trigonometry, ln, log, integral
+    ...row(18, 24),                                   // brackets, constants, x10^n
+    // 7 8 9 x / Ans, 4 5 6 - + |x|, 1 2 3 0 . =
+    at(24), at(25), at(26), at(27), at(28), at(35),
+    at(30), at(31), at(32), at(33), at(34), at(47),
+    at(36), at(37), at(38), at(39), at(40), at(41),
+    ...MATRIX_ROWS.slice(0, 6),                       // saved matrices A..F
+    ...MATRIX_ROWS.slice(6),                          // G, H, det, rank, inv, trace
+  ];
+}
+
+/**
  * Layout for a keypad host.
  *
  * The matrix tab gets its own keyboard containing the letters of every saved
@@ -533,7 +650,9 @@ const MATRIX_ROWS = [
 function layoutFor(hostSelector) {
   // The matrix tab is the only extra: it appends the saved-matrix letters.
   // Every other tab shares one grid, so no key ever moves between views.
-  if (hostSelector === '#mx-keys') return [...BASE_LAYOUT, ...MATRIX_ROWS];
+  if (hostSelector === '#mx-keys') {
+    return matrixLayout();
+  }
   return BASE_LAYOUT;
 }
 
@@ -551,7 +670,8 @@ function buildKeyboard(hostSelector, targetSelector, layout = null) {
     const btn = document.createElement('button');
     btn.className = `key ${cls}`;
     btn.type = 'button';
-    btn.textContent = label;
+    if (label.startsWith('html:')) btn.innerHTML = label.slice(5);
+    else btn.textContent = label;
     btn.dataset.action = action;
     btn.addEventListener('click', () => handleKeyAction(action, targetSelector));
     host.appendChild(btn);
@@ -663,6 +783,11 @@ async function cycleAnswerForm() {
     return;
   }
 
+/** Localised name of an answer form ("exact", "decimal" ...), or empty. */
+function formLabel(key) {
+  return key ? t(`form.${key}`) : '';
+}
+
   // Second press: restore the form the engine chose.
   if (state.formAltActive && state.formPrimaryLatex) {
     state.formAltActive = false;
@@ -670,7 +795,7 @@ async function cycleAnswerForm() {
     state.answerLatex = state.formPrimaryLatex;
     setLcdLatex(state.formPrimaryLatex);
     const chip = $('#form-chip');
-    if (chip) chip.textContent = state.formPrimaryKey || '';
+    if (chip) chip.textContent = formLabel(state.formPrimaryKey);
     return;
   }
 
@@ -692,7 +817,7 @@ async function cycleAnswerForm() {
     state.answerLatex = res.latex;
     setLcdLatex(res.latex);
     const chip = $('#form-chip');
-    if (chip) chip.textContent = res.key;
+    if (chip) chip.textContent = formLabel(res.key);
   } catch (err) {
     setLcd(message(err.message), { error: true });
   }
@@ -786,7 +911,8 @@ async function runCalculus(kind, direction = 'both') {
 async function runAnalysis() {
   const out = '#analysis-out';
   await guarded(out, async () => {
-    const fn = resolveAns(requireField('#an-fn', t('err.empty')));
+    const fn = resolveAns(markedFunction());
+    if (!fn) throw new Error(t('err.empty'));
 
     const raw = readField('#an-interval');
     let interval = null;
@@ -809,8 +935,169 @@ async function runAnalysis() {
       blocks.push(renderLines(section.lines));
     }
     showResult(out, '', blocks.join(''));
-    state.graphExprs = [fn];
+    await drawGraph();
   });
+}
+
+/* ============================================================ FUNCTIONS (up to four) */
+
+const FN_COLORS = ['#8f4c56', '#2b5fa8', '#2f7d5a', '#c7741b'];
+const FN_LIMIT = FN_COLORS.length;
+let fnSeq = 0;
+
+function fnRows() {
+  return $$('#fn-list .fn-row');
+}
+
+function readFunctions() {
+  return fnRows().map((row) => readField(`#${row.dataset.field}`));
+}
+
+/** Functions with a non-empty formula, each with the colour of its row. */
+function activeFunctions() {
+  return readFunctions()
+    .map((expr, index) => ({ expr: expr.trim(), index, color: FN_COLORS[index] }))
+    .filter((fn) => fn.expr);
+}
+
+function markedFunction() {
+  const row = fnRows()[state.fnMarked] || fnRows()[0];
+  return row ? readField(`#${row.dataset.field}`) : '';
+}
+
+function setActiveFnRow(row) {
+  fnRows().forEach((r) => r.classList.toggle('is-active', r === row));
+}
+
+let graphTimer = null;
+let graphSeq = 0;
+
+function scheduleGraph() {
+  clearTimeout(graphTimer);
+  graphTimer = setTimeout(drawGraph, 180);
+}
+
+function syncFnControls() {
+  const rows = fnRows();
+  const add = $('#btn-add-fn');
+  if (add) add.disabled = rows.length >= FN_LIMIT;
+  rows.forEach((row, index) => {
+    row.querySelector('.fn-remove').disabled = rows.length === 1 && !readField(`#${row.dataset.field}`);
+    const mark = row.querySelector('.fn-mark');
+    const marked = index === state.fnMarked;
+    mark.setAttribute('aria-pressed', String(marked));
+    mark.classList.toggle('on', marked);
+    row.querySelector('.fn-swatch').style.background = FN_COLORS[index];
+  });
+  renderLegend();
+  scheduleGraph();
+}
+
+function buildFnRow(value, index) {
+  const row = document.createElement('div');
+  row.className = 'fn-row';
+  row.dataset.index = String(index);
+  row.dataset.field = `an-fn-${++fnSeq}`;
+
+  const swatch = document.createElement('span');
+  swatch.className = 'fn-swatch';
+
+  const field = document.createElement('math-field');
+  field.className = 'mf-input';
+  field.id = row.dataset.field;
+
+  const mark = document.createElement('button');
+  mark.type = 'button';
+  mark.className = 'fn-mark';
+  mark.title = t('analysis.mark_full');
+  mark.setAttribute('aria-label', t('analysis.mark_full'));
+  mark.textContent = '\u25C9';
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'fn-remove';
+  remove.title = t('analysis.remove_fn');
+  remove.setAttribute('aria-label', t('analysis.remove_fn'));
+  remove.textContent = '\u00D7';
+
+  row.append(swatch, field, mark, remove);
+
+  field.addEventListener('focusin', () => setActiveFnRow(row));
+  field.addEventListener('input', syncFnControls);
+  mark.addEventListener('click', () => {
+    state.fnMarked = Number(row.dataset.index);
+    syncFnControls();
+  });
+  remove.addEventListener('click', () => removeFunction(row));
+  return { row, field, value };
+}
+
+function renderFnList(values, marked = 0) {
+  const list = $('#fn-list');
+  if (!list) return;
+  const items = values.length ? values : [''];
+  list.innerHTML = '';
+  items.forEach((value, index) => {
+    const { row, field } = buildFnRow(value, index);
+    list.appendChild(row);
+    setField(`#${row.dataset.field}`, value);
+  });
+  state.fnMarked = Math.min(Math.max(marked, 0), items.length - 1);
+  setActiveFnRow(fnRows()[0]);
+  syncFnControls();
+}
+
+function addFunction() {
+  const values = readFunctions();
+  if (values.length >= FN_LIMIT) return;
+  values.push('');
+  renderFnList(values, state.fnMarked);
+  const last = fnRows()[fnRows().length - 1];
+  setActiveFnRow(last);
+  const field = document.getElementById(last.dataset.field);
+  if (field && field.focus) field.focus();
+}
+
+function removeFunction(row) {
+  const values = readFunctions();
+  const index = Number(row.dataset.index);
+  if (values.length === 1) {
+    values[0] = '';
+  } else {
+    values.splice(index, 1);
+  }
+  let marked = state.fnMarked;
+  if (index === marked) marked = 0;
+  else if (index < marked) marked -= 1;
+  renderFnList(values, marked);
+}
+
+function formulaMarkup(latex) {
+  try {
+    return window.MathLive.convertLatexToMarkup(latex, { displayMode: false });
+  } catch {
+    return escapeHtml(latex);
+  }
+}
+
+function renderLegend() {
+  const fns = activeFunctions();
+  for (const legend of $$('.fn-legend')) {
+    legend.innerHTML = '';
+    for (const fn of fns) {
+      const chip = document.createElement('span');
+      chip.className = 'fn-chip';
+      const stripe = document.createElement('i');
+      stripe.className = 'fn-stripe';
+      stripe.style.background = fn.color;
+      const formula = document.createElement('span');
+      formula.className = 'fn-tex';
+      formula.style.color = fn.color;
+      formula.innerHTML = formulaMarkup(`y_{${fn.index + 1}} = ${plainToLatex(fn.expr)}`);
+      chip.append(stripe, formula);
+      legend.appendChild(chip);
+    }
+  }
 }
 
 /* ============================================================ GRAPH */
@@ -818,21 +1105,29 @@ async function runAnalysis() {
 const graphCanvas = $('#graph-canvas');
 const graphCtx = graphCanvas ? graphCanvas.getContext('2d') : null;
 
-async function drawGraph(exprs = null) {
+async function drawGraph() {
   if (!graphCanvas || !graphCtx) return;
   if (!$('#view-analysis').classList.contains('active')) return;
   // A hidden card has zero size; measuring now would draw nothing
   if (!graphCanvas.getBoundingClientRect().width) return;
 
-  try {
-    const list = (exprs || state.graphExprs || []).filter(Boolean);
-    if (!list.length) return;
+  const fns = activeFunctions();
+  renderLegend();
+  if (!fns.length) {
+    state.series = [];
+    renderCanvas();
+    return;
+  }
 
+  const seq = ++graphSeq;
+  try {
     // Sampling density is what keeps a curve smooth: 2400 points across the
     // visible span, so a wiggly function does not turn into a polygon.
-    const res = await py('plot', list, state.view.xMin, state.view.xMax, 2400);
+    const res = await py('plot', fns.map((fn) => fn.expr), state.view.xMin, state.view.xMax, 2400);
+    if (seq !== graphSeq) return;
     if (res.ok && res.series) {
-      state.series = res.series.map((s) => s.segments).flat();
+      state.series = res.series.flatMap((s, i) =>
+        s.segments.map((segment) => ({ segment, color: fns[i] ? fns[i].color : FN_COLORS[0] })));
     }
   } catch {
     // Graph non-critical: if core is busy, keep previous
@@ -945,17 +1240,15 @@ function renderGraph(canvas, ctx, detailed = false) {
   // discontinuity: a jump larger than the whole canvas height, which is what
   // an asymptote produces and a steep-but-continuous curve never does.
   if (state.series.length) {
-    const colors = ['#8f4c56', '#2f7d5a', '#a35a12', '#a83232', '#5a4a8f'];
-
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
     ctx.clip();
 
-    state.series.forEach((segment, index) => {
+    state.series.forEach(({ segment, color }) => {
       if (!segment || segment.length < 2) return;
 
-      ctx.strokeStyle = colors[index % colors.length];
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2.4;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
@@ -1054,9 +1347,6 @@ function renderGraph(canvas, ctx, detailed = false) {
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
   ctx.fillText('x', w - 6, axisY - 6);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('y', axisX + 7, 6);
 
 
 }
@@ -1098,34 +1388,6 @@ function niceStep(span) {
   return step;
 }
 
-/** Auto-scale Y axis: trim outliers, otherwise 1/x will flatten всё в линию. */
-async function autoscaleY() {
-  try {
-    const list = state.graphExprs.filter(Boolean);
-    if (!list.length) return;
-    const res = await py('plot', list, state.view.xMin, state.view.xMax, 400);
-    if (!res.ok) return;
-
-    const values = res.series
-      .flatMap((s) => s.segments)
-      .flat()
-      .map(([, y]) => y)
-      .filter((y) => Number.isFinite(y))
-      .sort((a, b) => a - b);
-
-    if (!values.length) return;
-
-    // Перцентили 2–98: одиночные выбросы не растягивают график
-    const lo = values[Math.floor(values.length * 0.02)];
-    const hi = values[Math.floor(values.length * 0.98)];
-    const pad = Math.max((hi - lo) * 0.12, 1);
-    state.view.yMin = lo - pad;
-    state.view.yMax = hi + pad;
-    renderCanvas();
-  } catch {
-    /* silently: масштаб — вторично */
-  }
-}
 
 
 /* ============================================================ FULLSCREEN GRAPH */
@@ -1147,21 +1409,7 @@ async function openFullscreenGraph() {
   if (!overlay || !canvas) return;
 
   const title = $('#graph-title-fs');
-  if (title) {
-    const expressions = (state.graphExprs || []).filter(Boolean);
-    if (expressions.length) {
-      const latex = expressions
-        .map((expression, index) => `y_{${index + 1}} = ${plainToLatex(expression)}`)
-        .join(',\\quad ');
-      try {
-        title.innerHTML = window.MathLive.convertLatexToMarkup(latex, { displayMode: false });
-      } catch {
-        title.textContent = expressions.map((e) => `y = ${e}`).join(', ');
-      }
-    } else {
-      title.textContent = '';
-    }
-  }
+  if (title) title.textContent = t('analysis.graph');
 
   overlay.hidden = false;
   graphFullscreenCanvas = canvas;
@@ -1326,11 +1574,6 @@ function setupFullscreenControls() {
     renderGraph(canvas, graphFullscreenCtx, true);
   };
 
-  const fit = $('#btn-fs-autoscale');
-  if (fit) fit.onclick = async () => {
-    await autoscaleY();
-    renderGraph(canvas, graphFullscreenCtx, true);
-  };
 }
 
 /* Pan and zoom */
@@ -1611,15 +1854,17 @@ async function chooseTheme(choice) {
  * Python returns a tuple instead of a sentence so the heading can be localised:
  * `("calculus.title.limit", "0")` becomes "Предел в точке 0" or "Limit at 0".
  */
-function renderTitle(title) {
+function titleText(title) {
   if (Array.isArray(title)) {
     const [key, arg] = title;
-    return `<h4>${escapeHtml(message(key))}${arg ? ' ' + escapeHtml(String(arg)) : ''}</h4>`;
+    return `${message(key)}${arg ? ' ' + String(arg) : ''}`;
   }
-  if (typeof title === 'string' && title.includes('.')) {
-    return `<h4>${escapeHtml(message(title))}</h4>`;
-  }
-  return `<h4>${escapeHtml(String(title || ''))}</h4>`;
+  if (typeof title === 'string' && title.includes('.')) return message(title);
+  return String(title || '');
+}
+
+function renderTitle(title) {
+  return `<h4>${escapeHtml(titleText(title))}</h4>`;
 }
 
 /* ============================================================ STEPS + EXPORT */
@@ -1683,18 +1928,14 @@ async function exportSolution(kind) {
     if (!solution) throw new Error(t('steps.show_first'));
 
     const payload = {
-      title: solution.title,
-      steps: solution.steps,
+      title: titleText(solution.title),
+      steps: solution.steps.map((step) => ({ ...step, text: step.text ? message(step.text) : step.text })),
       answer: solution.answer || currentAnswerText(),
       language: I18n.get(),
     };
 
     const method = kind === 'pdf' ? 'export_pdf' : 'export_latex';
     const res = await py(method, 'solution', payload, '');
-    if (res.cancelled) {
-      $(status).textContent = t('export.cancelled');
-      return;
-    }
     if (!res.ok) return showError(status, message(res.error));
 
     $(status).textContent = `${t('export.saved')}: ${res.path}`;
@@ -2483,16 +2724,30 @@ window.Euler = {
   },
   onService(d) {
     const line = $('#setup-status');
-    if (line) line.textContent = d.text || '';
+    const bar = $('#setup-progress');
+    const onbBar = $('#onb-progress');
+    const onbStatus = $('#onb-status');
+    if (d.stage === 'download') {
+      const percent = d.percent || 0;
+      const gb = d.total_gb ? ` · ${d.completed_gb}/${d.total_gb} GB` : '';
+      if (bar) bar.firstElementChild.style.width = `${percent}%`;
+      if (onbBar) onbBar.firstElementChild.style.width = `${percent}%`;
+      if (line) line.textContent = `${t('setup.ollama_downloading')} · ${percent}%${gb}`;
+      if (onbStatus) onbStatus.textContent = `${t('setup.ollama_downloading')} · ${percent}%${gb}`;
+      return;
+    }
+    const label = d.text ? t(d.text) : '';
+    if (line) line.textContent = label;
+    if (onbStatus) onbStatus.textContent = label;
     if (d.stage === 'install') {
-      const bar = $('#setup-progress');
       if (bar) bar.firstElementChild.style.width = '15%';
+      if (onbBar) onbBar.firstElementChild.style.width = '15%';
     }
   },
   onServiceDone(d) {
     const line = $('#setup-status');
-    // The engine sends a message key; translate it like every other key
-    if (line) line.textContent = message(d.text || '');
+    if (line) line.textContent = d.cancelled ? t('setup.cancelled') : message(d.text || '');
+    showSetupBusy(false);
     loadOllamaStatus();
   },
   onPull(d) {
@@ -2509,9 +2764,16 @@ window.Euler = {
     const onbStatus = $('#onb-status');
     if (onbStatus) onbStatus.textContent = `${percent}%${gb}`;
   },
+  onDeleteDone(d) {
+    onDeleteFinished(d || {});
+  },
   onPullDone(d) {
     const line = $('#setup-status');
-    if (line) line.textContent = d.ok ? 'OK' : `${t('common.error')}: ${message(d.error)}`;
+    showSetupBusy(false);
+    if (line) {
+      if (d.cancelled) line.textContent = t('setup.cancelled');
+      else line.textContent = d.ok ? 'OK' : `${t('common.error')}: ${message(d.error)}`;
+    }
     if (d.ok) {
       loadOllamaStatus();
       const overlay = $('#onboarding');
@@ -2520,11 +2782,11 @@ window.Euler = {
   },
   onSetupDone(d) {
     const line = $('#setup-status');
-    if (line) line.textContent = d.text || '';
+    showSetupBusy(false);
+    if (line) line.textContent = d.cancelled ? t('setup.cancelled') : (d.ok ? (d.text || '') : message(d.text || d.error || ''));
     if (d.ok) {
       const bar = $('#setup-progress');
       if (bar) bar.firstElementChild.style.width = '100%';
-      $('#onboarding').hidden = true;
       loadOllamaStatus();
     }
   },
@@ -2605,15 +2867,19 @@ async function loadSettings() {
     } else {
       // First launch (or an install that skipped the wizard): probe now and
       // persist. Reading only the saved value left the panel empty forever.
-      $('#hw-out').textContent = t('settings.hardware_note');
+      $('#hw-out').textContent = t('common.loading');
+      setHwState('detecting');
       py('hardware', false)
         .then((probed) => {
-          if (!probed || !probed.ok) return;
+          if (!probed || !probed.ok) {
+            setHwState('failed');
+            return;
+          }
           // The bridge spreads the profile, so the spec lives under "hardware"
           // for the nested fields and at the top level for the rest.
           renderHardware({ ...(probed.hardware || {}), model: probed.model });
         })
-        .catch(() => { /* the note stays: a probe must never break settings */ });
+        .catch(() => { setHwState('failed'); });
     }
   });
 
@@ -2633,6 +2899,16 @@ function renderHardwarePanel() {
   if (state.hardwareProfile) renderHardware(state.hardwareProfile);
 }
 
+/** Set the pill beside the hardware heading: detecting, done or failed. */
+function setHwState(kind) {
+  const el = $('#hw-state');
+  if (!el) return;
+  const key = ONB_STATE_KEYS[kind] || ONB_STATE_KEYS.detecting;
+  el.dataset.state = kind;
+  el.dataset.i18n = key;
+  el.textContent = t(key);
+}
+
 function renderHardware(profile) {
   const el = $('#hw-out');
   if (!el) return;
@@ -2644,20 +2920,25 @@ function renderHardware(profile) {
   const source = profile || state.hardwareProfile || {};
   const spec = source.hardware || source;
 
-  const cpu = spec.cpu || spec.cpu_name || '—';
+  const cpu = spec.cpu || spec.cpu_name || EM_DASH;
   const ram = spec.ram_gb ?? spec.total_ram_gb;
   const vram = spec.vram_gb;
-  const model = source.model || source.recommended || spec.model || '—';
+  const model = source.model || source.recommended || spec.model || EM_DASH;
 
-  const gpu = vram
-    ? `${t('hw.vram')}: ${vram} ${t('hw.gb')}`
-    : t('hw.no_gpu');
+  // The same rows as the first-run card, so the machine profile reads the same
+  // in both places: key on the left, value in the accent colour.
+  const rows = [
+    [t('hw.cpu'), cpu],
+    [t('hw.ram'), `${ram ?? '?'} ${t('hw.gb')}`],
+  ];
+  if (vram) rows.push([t('hw.vram'), `${vram} ${t('hw.gb')}`]);
+  rows.push([t('hw.recommend'), model]);
 
-  el.textContent =
-    `${t('hw.cpu')}: ${cpu}\n` +
-    `${t('hw.ram')}: ${ram ?? '?'} ${t('hw.gb')}\n` +
-    `${gpu}\n` +
-    `${t('hw.recommend')}: ${model}`;
+  el.innerHTML = rows.map(([key, value]) =>
+    '<div class="onb-row"><span class="onb-key">' + escapeHtml(key) + '</span>' +
+    '<span class="onb-val">' + escapeHtml(String(value)) + '</span></div>').join('');
+
+  setHwState('done');
 }
 
 function buildLangGrid() {
@@ -2710,7 +2991,7 @@ function buildLangGrid() {
 function retranslateDynamic() {
   buildKeyboard('#keys', '#lcd-input');
   buildKeyboard('#kb-cx', '#cx-fn');
-  buildKeyboard('#kb-an', '#an-fn');
+  buildKeyboard('#kb-an', '#fn-list .fn-row.is-active math-field');
   buildKeyboard('#kb-eq', null);
   buildKeyboard('#mx-keys', '#mx-input');
 
@@ -2770,7 +3051,10 @@ async function loadOllamaStatus() {
       opt.textContent = `${m.name} (${m.size_gb} GB)`;
       installedSelect.appendChild(opt);
     }
+    // A populated list with nothing selected left "Delete model" reporting
+    // "no models installed" while a model was shown two centimetres above.
     if (state.model) installedSelect.value = state.model;
+    else if (installedSelect.options.length > 1) installedSelect.value = installedSelect.options[1].value;
   } catch {
     /* silently: settings are non-critical для работы калькулятора */
   }
@@ -2787,7 +3071,9 @@ async function saveUserState() {
       language: I18n.get(),
       unit: state.unit,
       last_calc_expr: readField('#lcd-input'),
-      last_analysis_fn: readField('#an-fn'),
+      graph_functions: readFunctions(),
+      graph_marked: state.fnMarked,
+      analysis_interval: readField('#an-interval'),
       last_calculus_fn: readField('#cx-fn'),
       graph_view: state.view,
     });
@@ -2811,8 +3097,11 @@ async function restoreUserState(settings) {
   if (settings.last_calc_expr) {
     setField('#lcd-input', settings.last_calc_expr);
   }
-  if (settings.last_analysis_fn) {
-    setField('#an-fn', settings.last_analysis_fn);
+  const savedFunctions = Array.isArray(settings.graph_functions) ? settings.graph_functions : [];
+  renderFnList(savedFunctions.length ? savedFunctions.map(String) : ['x^3-3x'],
+    Number(settings.graph_marked) || 0);
+  if (settings.analysis_interval) {
+    setField('#an-interval', settings.analysis_interval);
   }
   if (settings.last_calculus_fn) {
     setField('#cx-fn', settings.last_calculus_fn);
@@ -2903,6 +3192,30 @@ function switchTab(name) {
 
 /* ============================================================ ONBOARDING */
 
+const EM_DASH = '\u2014';
+
+const ONB_STATE_KEYS = { detecting: 'onb.detecting', done: 'onb.done', failed: 'onb.failed' };
+
+function tf(key, vars) {
+  return t(key).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
+}
+
+function reasonText(reason) {
+  if (!reason || typeof reason !== 'object') return '';
+  if (reason.code === 'vram') return tf('hw.reason_vram', reason);
+  if (reason.code === 'ram') return tf('hw.reason_ram', reason);
+  if (reason.code === 'low') return tf('hw.reason_low', reason);
+  return '';
+}
+
+function setOnbState(state) {
+  const el = $('#onb-state');
+  const key = ONB_STATE_KEYS[state];
+  el.dataset.state = state;
+  el.dataset.i18n = key;
+  el.textContent = t(key);
+}
+
 async function checkFirstRun() {
   try {
     const settings = await py('settings_get');
@@ -2910,19 +3223,21 @@ async function checkFirstRun() {
 
     const overlay = $('#onboarding');
     overlay.hidden = false;
-    $('#onb-status').textContent = t('onb.detecting');
+    setOnbState('detecting');
 
     // If hardware probing stalls, the user must still be able to leave.
     setTimeout(() => {
       if (!overlay.hidden && $('#onb-spec').dataset.loaded !== '1') {
-        $('#onb-status').textContent = t('onb.failed');
+        setOnbState('failed');
+        $('#onb-spec').textContent = t('onb.failed_hint');
         $('#onb-accept').textContent = t('onb.skip');
       }
     }, 6000);
 
     const hw = await py('hardware', false);
     if (!hw.ok) {
-      $('#onb-spec').textContent = t('onb.failed');
+      setOnbState('failed');
+      $('#onb-spec').textContent = t('onb.failed_hint');
       $('#onb-accept').textContent = t('onb.skip');
       $('#onb-accept').onclick = async () => {
         await py('settings_set', { onboarding_done: true });
@@ -2934,20 +3249,24 @@ async function checkFirstRun() {
     const model = hw.model || hw.recommended;
     const meta = CATALOG.find((m) => m.tag === model);
     $('#onb-spec').dataset.loaded = '1';
+    setOnbState('done');
+    const rows = [
+      [t('hw.cpu'), hw.hardware?.cpu || '\u2014'],
+      [t('hw.ram'), `${hw.hardware?.ram_gb ?? '?'} ${t('hw.gb')}`],
+    ];
+    if (hw.hardware?.vram_gb) rows.push([t('hw.vram'), `${hw.hardware.vram_gb} ${t('hw.gb')}`]);
+    rows.push([t('hw.recommend'), model + (meta ? ` (${meta.size_gb} ${t('hw.gb')})` : '')]);
     $('#onb-spec').innerHTML =
-      `<b>${escapeHtml(t('hw.cpu'))}:</b> ${escapeHtml(hw.hardware?.cpu || '—')}<br>` +
-      `<b>${escapeHtml(t('hw.ram'))}:</b> ${hw.hardware?.ram_gb ?? '?'} ${t('hw.gb')}` +
-      (hw.hardware?.vram_gb ? `, <b>${escapeHtml(t('hw.vram'))}:</b> ${hw.hardware.vram_gb} ${t('hw.gb')}` : '') +
-      `<br><br><b>${escapeHtml(t('hw.recommend'))}:</b> ${escapeHtml(model)}` +
-      (meta ? ` (${meta.size_gb} ${t('hw.gb')})` : '') +
-      `<br><span style="color:var(--ink-dim)">${escapeHtml(hw.reason || '')}</span>`;
+      rows.map(([key, value]) =>
+        `<div class="onb-row"><span class="onb-key">${escapeHtml(key)}</span>` +
+        `<span class="onb-val">${escapeHtml(value)}</span></div>`).join('') +
+      (reasonText(hw.reason) ? `<p class="onb-reason">${escapeHtml(reasonText(hw.reason))}</p>` : '');
 
     $('#onb-accept').onclick = async () => {
-      $('#onb-title').textContent = t('onb.installing');
-      $('#onb-progress').hidden = false;
-      $('#onb-accept').disabled = true;
-      $('#onb-later').disabled = true;
-      await py('setup_all', model);
+      overlay.hidden = true;
+      switchTab('settings');
+      showSetupBusy(true);
+      await startSetup('setup_all', [model]);
       await py('settings_set', { onboarding_done: true, model });
     };
   } catch {
@@ -2971,7 +3290,14 @@ async function deleteSelectedModel() {
   const status = $('#setup-status');
 
   if (!model) {
-    if (status) status.textContent = t('settings.no_models');
+    // Exactly one installed model and nothing selected: treat it as selected.
+    // Only a genuinely empty list is "no models installed".
+    const available = select ? Array.from(select.options).filter((o) => o.value) : [];
+    if (available.length === 1) {
+      if (select) select.value = available[0].value;
+      return deleteSelectedModel();
+    }
+    if (status) status.textContent = available.length ? t('settings.pick_model') : t('settings.no_models');
     return;
   }
 
@@ -2980,26 +3306,43 @@ async function deleteSelectedModel() {
   if (!window.confirm(question)) return;
 
   if (status) status.textContent = '\u2026';
+  showSetupBusy(true);
   try {
     const res = await py('ollama_delete', model);
     if (!res.ok) {
+      showSetupBusy(false);
       if (status) status.textContent = `${t('common.error')}: ${message(res.error)}`;
       return;
     }
-
-    let note = `${t('settings.deleted')}: ${model}`;
-    if (res.fallback_model) {
-      note += ` \u00b7 ${t('settings.fallback')} ${res.fallback_model}`;
-      state.model = res.fallback_model;
-      renderModelChip(res.fallback_model);
-    }
-    if (status) status.textContent = note;
-
-    // Rebuild the installed list from live data
-    await loadOllamaStatus();
+    // The job answers on 'onDeleteDone': deleting a multi-gigabyte model takes
+    // seconds, and a synchronous call would freeze the busy state on screen.
+    state.deletingModel = model;
   } catch (err) {
+    showSetupBusy(false);
     if (status) status.textContent = `${t('common.error')}: ${err.message}`;
   }
+}
+
+/** Completion of the model deletion, including the active-model fallback. */
+async function onDeleteFinished(d) {
+  const status = $('#setup-status');
+  showSetupBusy(false);
+  const model = state.deletingModel || '';
+  state.deletingModel = '';
+
+  if (!d.ok) {
+    if (status) status.textContent = `${t('common.error')}: ${message(d.error || d.text || '')}`;
+    return;
+  }
+
+  let note = `${t('settings.deleted')}: ${model}`;
+  if (d.fallback_model) {
+    note += ` \u00b7 ${t('settings.fallback')} ${d.fallback_model}`;
+    state.model = d.fallback_model;
+    renderModelChip(d.fallback_model);
+  }
+  if (status) status.textContent = note;
+  await loadOllamaStatus();
 }
 
 /* ============================================================ EVENT BINDING */
@@ -3008,14 +3351,15 @@ function bindEvents() {
   /* Калькулятор */
   buildKeyboard('#keys', '#lcd-input');
 
-  // Enter is "=" on the calculator. Ctrl+Enter keeps working everywhere,
-  // but a plain Enter while the LCD has focus is what a user expects.
-  on('#lcd-input', 'keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      evaluateCalculator();
-    }
-  });
+  // Capture phase: MathLive would otherwise insert a line break on Enter first.
+  // Enter and Ctrl+Enter both evaluate here; Shift+Enter is left alone.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    if (document.activeElement?.id !== 'lcd-input') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    evaluateCalculator();
+  }, true);
 
   $$('.tab').forEach((tab) => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
@@ -3038,8 +3382,8 @@ function bindEvents() {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       const active = document.activeElement;
-      if (active && active.id === 'lcd-input') evaluateCalculator();
-      else if (active && active.id === 'ai-input') sendAiMessage();
+      if (active && active.id === 'ai-input') sendAiMessage();
+      else if ($('#view-analysis').classList.contains('active')) runAnalysis();
       else if ($('#view-calculus').classList.contains('active')) runCalculus('limit');
       else if ($('#view-equations').classList.contains('active')) solveEquations();
     }
@@ -3048,7 +3392,7 @@ function bindEvents() {
   /* Клавиатуры во вкладках: раскрываются по кнопке, пишут в активное поле */
   const kbMap = [
     ['#btn-kb-cx', '#kb-cx', '#cx-fn'],
-    ['#btn-kb-an', '#kb-an', '#an-fn'],
+    ['#btn-kb-an', '#kb-an', '#fn-list .fn-row.is-active math-field'],
     ['#btn-kb-eq', '#kb-eq', null],   // для уравнений — в последнее поле
   ];
 
@@ -3082,16 +3426,18 @@ function bindEvents() {
 
   /* Анализ */
   on('#btn-analyze', 'click', runAnalysis);
-  on('#btn-graph', 'click', async () => {
-    await guarded('#analysis-out', async () => {
-      state.graphExprs = [requireField('#an-fn', t('err.empty'))];
-      await drawGraph();
-    });
+  on('#btn-add-fn', 'click', addFunction);
+  on('#btn-open-exports', 'click', async () => {
+    const res = await py('open_exports_dir');
+    $('#export-status').textContent = res.ok ? res.path : `${t('common.error')}: ${res.error}`;
   });
-  on('#btn-autoscale', 'click', autoscaleY);
+  on('#btn-fs-pdf', 'click', exportGraphPdf);
   on('#btn-graph-fullscreen', 'click', openFullscreenGraph);
   on('#btn-clear-analysis', 'click', () => {
+    renderFnList([''], 0);
     showResult('#analysis-out', '');
+    state.series = [];
+    renderCanvas();
   });
 
   /* Матрицы */
@@ -3202,13 +3548,19 @@ function bindEvents() {
   on('#btn-hw-rescan', 'click', async () => {
     await guarded('#hw-out', async () => {
       $('#hw-out').textContent = '…';
+      setHwState('detecting');
       const res = await py('hardware', true);
-      if (!res.ok) return showError('#hw-out', message(res.error));
+      if (!res.ok) {
+        setHwState('failed');
+        return showError('#hw-out', message(res.error));
+      }
       renderHardware(res.hardware ? { ...res.hardware, model: res.model } : res);
     });
   });
 
   on('#btn-setup-all', 'click', () => startSetup('setup_all', [$('#set-model').value]));
+  on('#btn-setup-cancel', 'click', () => py('ollama_cancel'));
+  on('#onb-cancel', 'click', () => py('ollama_cancel'));
   on('#btn-install-ollama', 'click', () => startSetup('ollama_install'));
   on('#btn-start-ollama', 'click', () => startSetup('ollama_start'));
   on('#btn-pull-model', 'click', () => startSetup('ollama_pull', [$('#set-model').value]));
@@ -3254,8 +3606,61 @@ function bindEvents() {
   });
 }
 
+/** Pixels of a canvas as base64 RGB, the form the engine packs into a PDF image. */
+function canvasRgbBase64(canvas) {
+  const ctx = canvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const rgb = new Uint8Array((data.length / 4) * 3);
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    rgb[j] = data[i];
+    rgb[j + 1] = data[i + 1];
+    rgb[j + 2] = data[i + 2];
+  }
+  let binary = '';
+  const chunk = 0x8000;
+  for (let k = 0; k < rgb.length; k += chunk) {
+    binary += String.fromCharCode.apply(null, rgb.subarray(k, k + chunk));
+  }
+  return btoa(binary);
+}
+
+async function exportGraphPdf() {
+  const canvas = $('#graph-canvas-fs');
+  const status = $('#graph-fs-status');
+  if (!canvas || !canvas.width || !status) return;
+  status.textContent = '\u2026';
+  const payload = {
+    width: canvas.width,
+    height: canvas.height,
+    rgb: canvasRgbBase64(canvas),
+    title: activeFunctions().map((fn) => `y = ${fn.expr}`).join(', '),
+    language: I18n.get(),
+  };
+  const res = await py('export_graph_pdf', payload, 'graph');
+  if (!res.ok) status.textContent = `${t('common.error')}: ${message(res.error)}`;
+  else status.textContent = `${t('export.saved')}: ${res.path}`;
+}
+
+/** Show the cancel button while an Ollama download or install runs. */
+function showSetupBusy(busy) {
+  for (const id of ['#btn-setup-cancel', '#onb-cancel']) {
+    const el = $(id);
+    if (el) el.hidden = !busy;
+  }
+  // Every download and install in Settings is covered by the one cancel button
+  for (const id of ['#btn-setup-all', '#btn-install-ollama', '#btn-start-ollama', '#btn-pull-model', '#btn-delete-model']) {
+    const el = $(id);
+    if (el) el.disabled = busy;
+  }
+}
+
 async function startSetup(method, args = []) {
   const line = '#setup-status';
+  // Every install and download goes through here, so the Cancel button and the
+  // disabled action buttons are set in one place. Before this only the
+  // "Скачать всё" handler turned them on, and every other download ran with no
+  // way to stop it.
+  showSetupBusy(true);
   try {
     if (method === 'setup_all' || method === 'ollama_pull') {
       if (!args[0]) {
@@ -3265,7 +3670,10 @@ async function startSetup(method, args = []) {
     }
     $(line).textContent = '…';
     const res = await py(method, ...args);
-    if (res && res.ok === false) $(line).textContent = res.error || t('common.error');
+    if (res && res.ok === false) {
+      showSetupBusy(false);
+      $(line).textContent = res.error || t('common.error');
+    }
   } catch (err) {
     $(line).textContent = err.message;
   }

@@ -257,12 +257,12 @@ def detect() -> Hardware:
 
 
 def pick(hardware: Hardware, catalog: tuple[ModelSpec, ...] = CATALOG
-         ) -> tuple[ModelSpec, str]:
+         ) -> tuple[ModelSpec, dict]:
     """
     Choose the largest model that fits.
 
-    :returns: the specification and a human-readable explanation, which the
-              interface shows so a smaller model is never a silent surprise.
+    :returns: the specification and a machine-readable reason (a code and its
+              numbers); the interface renders it in the user's language.
     """
     budget = hardware.budget_gb
 
@@ -270,16 +270,13 @@ def pick(hardware: Hardware, catalog: tuple[ModelSpec, ...] = CATALOG
         if spec.ram_gb > budget:
             continue
         if hardware.vram_gb and spec.ram_gb <= hardware.vram_gb:
-            reason = f"fits in VRAM ({hardware.vram_gb} GB), inference runs on GPU"
+            reason = {"code": "vram", "vram": hardware.vram_gb, "needs": spec.ram_gb}
         else:
-            reason = f"RAM {hardware.total_ram_gb} GB, {budget} GB usable"
-        return spec, f"{reason}; model needs {spec.ram_gb} GB"
+            reason = {"code": "ram", "ram": hardware.total_ram_gb,
+                      "budget": budget, "needs": spec.ram_gb}
+        return spec, reason
 
-    lightest = catalog[-1]
-    return lightest, (
-        f"only {budget} GB available, using the smallest model. "
-        "High-quality local answers are not possible on this hardware."
-    )
+    return catalog[-1], {"code": "low", "budget": budget}
 
 
 def recommend() -> dict:

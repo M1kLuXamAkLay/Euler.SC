@@ -22,9 +22,9 @@ SOFTWARE.
 
 Bundled third-party components:
 
-  DejaVu Sans font - Bitstream Vera / Public Domain licence
-  SymPy            - BSD 3-Clause
-  NumPy            - BSD 3-Clause
-  pywebview        - BSD 3-Clause
-  MathLive         - MIT
-  marked           - MIT
+Bitstream Vera / Public Domain - DejaVu Sans font
+BSD 3-Clause - SymPy
+BSD 3-Clause - NumPy
+BSD 3-Clause - pywebview
+MIT - MathLive
+MIT - marked

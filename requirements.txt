@@ -10,6 +10,9 @@ sympy>=1.13
 # Numeric evaluation for the plot sampler only.
 numpy>=1.26
 
+# Typeset formulas in the solution PDF (mathtext engine, no LaTeX needed).
+matplotlib>=3.8
+
 # Optional: accurate RAM probing. The engine falls back to kernel32 when absent.
 psutil>=5.9
 

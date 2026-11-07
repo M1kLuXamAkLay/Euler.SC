@@ -35,7 +35,7 @@ _SCALAR_NAMES = frozenset({
     "sin", "cos", "tan", "cot", "ctg", "sec", "csc",
     "asin", "acos", "atan", "arcsin", "arccos", "arctan",
     "sinh", "cosh", "tanh",
-    "sqrt", "cbrt", "exp", "log", "ln", "lg", "Abs", "abs",
+    "sqrt", "cbrt", "exp", "log", "ln", "lg", "log10", "Abs", "abs",
     "factorial", "floor", "ceiling", "sign",
     "Min", "Max", "deg", "rad",
 })
@@ -138,8 +138,11 @@ def _scalar_locals(var) -> dict:
         "arcsin": sp.asin, "arccos": sp.acos, "arctan": sp.atan,
         "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
         "sqrt": sp.sqrt, "cbrt": lambda v: sp.Pow(v, sp.Rational(1, 3)),
-        "exp": sp.exp, "log": sp.log, "ln": sp.log,
-        "lg": lambda v: sp.log(v, 10),
+        "exp": sp.exp,
+        # "log" is the base-10 key: its inverse on the keypad is 10^x, and a
+        # logarithm that ignored the base sat next to "ln" doing the same thing.
+        "log": lambda v: sp.log(v, 10), "ln": sp.log,
+        "lg": lambda v: sp.log(v, 10), "log10": lambda v: sp.log(v, 10),
         "Abs": sp.Abs, "abs": sp.Abs,
         "factorial": sp.factorial,
         "floor": sp.floor, "ceiling": sp.ceiling, "sign": sp.sign,
@@ -187,11 +190,61 @@ _MIXED_FRACTION = re.compile(r"(?<![\w.)])(-?\d+)\s+(\d+)/(\d+)")
 _FACTORIAL = re.compile(r"(\d+(?:\.\d+)?|[a-zA-Z]\w*|\([^()]*\))!")
 
 
+_LOG_BASE = re.compile(r"\\?\b(log10|log|lg)\s*_\s*(?:\{([^{}]*)\}|(\d+(?:\.\d+)?))")
+
+
+def _read_group(text: str, start: int) -> tuple[str, int]:
+    """Return the contents of the bracketed group at ``start`` and the end index.
+
+    Bracket counting, not a regular expression: ``log_2(sin(x)+1)`` nests.
+    """
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:index], index + 1
+    return text[start + 1:], len(text)
+
+
+def _expand_log_bases(expr: str) -> str:
+    """Rewrite ``log_b(x)`` as ``log(x)/log(b)``.
+
+    Bases reach the engine in several shapes: ``\\log_{9}(9)`` from a braced
+    subscript, ``\\log_9(9)`` from a bare one (MathLive emits this for a single
+    digit), and the same after the LaTeX macros have already been stripped.
+    Left alone, the subscript turns into the identifier ``log_9``, which is
+    rejected as an unknown name.
+    """
+    while True:
+        match = _LOG_BASE.search(expr)
+        if not match:
+            return expr
+
+        base = match.group(2) if match.group(2) is not None else match.group(3)
+        cursor = match.end()
+        while cursor < len(expr) and expr[cursor] == " ":
+            cursor += 1
+
+        if cursor < len(expr) and expr[cursor] == "(":
+            argument, after = _read_group(expr, cursor)
+        else:
+            token = re.match(r"-?\d+(?:\.\d+)?|[a-zA-Z]+", expr[cursor:])
+            if not token:
+                return expr
+            argument = token.group(0)
+            after = cursor + len(argument)
+
+        expr = f"{expr[:match.start()]}(log({argument})/log({base})){expr[after:]}"
+
+
 def preprocess(raw: str) -> str:
     """Normalise human notation into Python syntax."""
     if not raw:
         return ""
-    expr = raw
+    expr = _expand_log_bases(raw)
     for src, dst in _REPLACEMENTS:
         expr = expr.replace(src, dst)
     expr = re.sub(r"\|([^|]*)\|", r"Abs(\1)", expr)

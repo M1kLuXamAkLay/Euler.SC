@@ -5,20 +5,37 @@ installer download, triggered by an explicit user action.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import shutil
 import subprocess
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterator
+
+from . import download as dl
 
 HOST = "http://127.0.0.1:11434"
 # Enough for a worked solution; far too little for a runaway loop.
 MAX_ANSWER_TOKENS = 900
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+GITHUB_LATEST = "https://api.github.com/repos/ollama/ollama/releases/latest"
+INSTALLER_NAME = "OllamaSetup.exe"
+# Inno Setup switches. /S is the NSIS switch and would show the installer window.
+INSTALLER_ARGS = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
+INSTALL_TIMEOUT = 1800
+PULL_TIMEOUT = 30
+PULL_RETRIES = 5
+
+_cancel = threading.Event()
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.Lock()
 
 # Language of the answer follows the interface language, not the prompt text:
 # a user with a French interface who pastes a Russian task still wants French.
@@ -158,60 +175,153 @@ def start_server(wait_seconds: float = 25.0,
     raise OllamaError("ExprError.ollama_timeout")
 
 
-def install_windows(on_progress: Callable[[dict], None] | None = None) -> dict:
-    """
-    Install Ollama on Windows via winget, falling back to the official installer.
+def begin_job() -> None:
+    _cancel.clear()
 
-    Returns a result dictionary instead of raising: the outcome is shown in the UI.
+
+def cancel_job() -> None:
+    _cancel.set()
+
+
+def _check_cancel() -> None:
+    if _cancel.is_set():
+        raise dl.DownloadCancelled("ExprError.cancelled")
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True, timeout=15, creationflags=CREATE_NO_WINDOW)
+    else:
+        proc.kill()
+
+
+def abort_all() -> None:
+    """Stop every download and child process this application started."""
+    _cancel.set()
+    with _children_lock:
+        running = list(_children)
+    for proc in running:
+        try:
+            _kill(proc)
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+
+def _run_tracked(args: list[str], timeout: float, honour_cancel: bool = True) -> int:
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=CREATE_NO_WINDOW)
+    with _children_lock:
+        _children.add(proc)
+    try:
+        deadline = time.monotonic() + timeout
+        while proc.poll() is None:
+            if honour_cancel and _cancel.is_set():
+                _kill(proc)
+                break
+            if time.monotonic() > deadline:
+                _kill(proc)
+                raise OllamaError("ExprError.install_timeout")
+            time.sleep(0.25)
+        if honour_cancel and _cancel.is_set():
+            raise dl.DownloadCancelled("ExprError.cancelled")
+        return proc.returncode
+    finally:
+        with _children_lock:
+            _children.discard(proc)
+
+
+def _user_install_dir() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama"
+
+
+def _rollback_partial_install() -> None:
+    """Remove a half-written Ollama install started by this job.
+
+    Runs only after the installer itself was started, so an existing install
+    that the user already had is never touched.
+    """
+    folder = _user_install_dir()
+    uninstaller = folder / "unins000.exe"
+    if uninstaller.exists():
+        try:
+            _run_tracked([str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
+                         timeout=300, honour_cancel=False)
+        except (OSError, subprocess.SubprocessError, OllamaError):
+            pass
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def _installer_asset() -> tuple[str, int, str]:
+    """URL, size and SHA-256 of the official installer, as published by GitHub."""
+    req = urllib.request.Request(GITHUB_LATEST, headers={
+        "Accept": "application/vnd.github+json", "User-Agent": dl.USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            release = json.loads(resp.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OllamaError(f"ExprError.release_unavailable:{exc}") from None
+
+    for asset in release.get("assets", []):
+        if asset.get("name") == INSTALLER_NAME:
+            digest = str(asset.get("digest", ""))
+            if not digest.startswith("sha256:"):
+                raise OllamaError("ExprError.no_checksum")
+            return asset["browser_download_url"], int(asset["size"]), digest.split(":", 1)[1]
+    raise OllamaError("ExprError.installer_not_found")
+
+
+def install_windows(on_progress: Callable[[dict], None] | None = None) -> dict:
+    """Download the official installer, verify it and run it silently.
+
+    A cancel or an application exit during the install rolls it back. A cancel
+    during the download discards the partial file; any other failure keeps it so
+    the next attempt resumes instead of starting over.
     """
     if is_installed():
-        return {"ok": True, "already": True, "text": "settings.running"}
+        return {"ok": True, "already": True, "text": "settings.installed"}
 
-    winget = shutil.which("winget")
-    if winget:
-        if on_progress:
-            on_progress({"stage": "install", "text": "settings.installing"})
-        try:
-            proc = subprocess.run(
-                [winget, "install", "-e", "--id", "Ollama.Ollama",
-                 "--accept-package-agreements", "--accept-source-agreements",
-                 "--disable-interactivity"],
-                capture_output=True, text=True, timeout=900,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            if proc.returncode == 0 and is_installed():
-                return {"ok": True, "text": "settings.installed"}
-        except (subprocess.SubprocessError, OSError) as exc:
-            if on_progress:
-                on_progress({"stage": "install", "text": f"ExprError.winget_failed:{exc}"})
-
-    # Fallback: official installer. Downloaded and run directly rather than piped to the shell.
-    if on_progress:
-        on_progress({"stage": "download", "text": "settings.downloading"})
+    emit = on_progress or (lambda _p: None)
+    installer = Path(tempfile.gettempdir()) / INSTALLER_NAME
+    started = False
     try:
-        url = "https://ollama.com/download/OllamaSetup.exe"
-        target = os.path.join(os.environ.get("TEMP", "."), "OllamaSetup.exe")
-        urllib.request.urlretrieve(url, target)
+        url, size, digest = _installer_asset()
 
-        if on_progress:
-            on_progress({"stage": "install", "text": "settings.installing"})
-        subprocess.run([target, "/SILENT", "/NORESTART"], timeout=1800,
-                       creationflags=CREATE_NO_WINDOW)
-        os.remove(target)
+        def progress(done: int, total: int) -> None:
+            emit({
+                "stage": "download",
+                "percent": int(done * 100 / total) if total else 0,
+                "completed_gb": round(done / 1024 ** 3, 2),
+                "total_gb": round(total / 1024 ** 3, 2),
+            })
 
-        # The installer edits PATH; the current process does not see that change.
-        for candidate in (
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama"),
-            r"C:\Program Files\Ollama",
-        ):
-            exe = os.path.join(candidate, "ollama.exe")
-            if os.path.exists(exe):
-                os.environ["PATH"] = candidate + os.pathsep + os.environ.get("PATH", "")
+        dl.fetch(url, installer, sha256=digest, size=size, cancel=_cancel, on_progress=progress)
+
+        emit({"stage": "install", "text": "setup.ollama_installing"})
+        started = True
+        code = _run_tracked([str(installer), *INSTALLER_ARGS], timeout=INSTALL_TIMEOUT)
+        if code != 0:
+            raise OllamaError(f"ExprError.install_failed:{code}")
+
+        for candidate in (_user_install_dir(), Path(r"C:\Program Files\Ollama")):
+            exe = candidate / "ollama.exe"
+            if exe.exists():
+                os.environ["PATH"] = str(candidate) + os.pathsep + os.environ.get("PATH", "")
                 return {"ok": True, "text": "settings.installed"}
+        raise OllamaError("ExprError.ollama_not_found")
+    except dl.DownloadCancelled:
+        if started:
+            _rollback_partial_install()
+        else:
+            dl.discard(installer)
+        return {"ok": False, "cancelled": True, "text": "setup.cancelled"}
+    except (dl.DownloadError, OllamaError, OSError, subprocess.SubprocessError) as exc:
+        if started:
+            _rollback_partial_install()
+        return {"ok": False, "text": str(exc)}
+    finally:
+        installer.unlink(missing_ok=True)
 
-        return {"ok": False, "text": "ExprError.ollama_not_found"}
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {"ok": False, "text": f"ExprError.install_failed:{exc}"}
 
 
 # ------------------------------------------------------------------ models
@@ -235,42 +345,64 @@ def has_model(name: str) -> bool:
     return any(m.name in (name, want) for m in list_models())
 
 
-def pull(name: str,
-         on_progress: Callable[[dict], None] | None = None,
-         should_stop: Callable[[], bool] | None = None) -> None:
-    """Download a model, reporting progress in percent and gigabytes."""
+def pull(name: str, on_progress: Callable[[dict], None] | None = None) -> None:
+    """Download a model.
+
+    Ollama verifies every blob digest and resumes partial blobs itself, so a
+    retry after a dropped connection continues the transfer instead of restarting.
+    A cancel stops the stream; Ollama keeps only complete blobs, so the partial
+    data is removed by its own cleanup and nothing under the model name is left.
+    """
     body = json.dumps({"model": name, "stream": True}).encode()
+    for attempt in range(PULL_RETRIES + 1):
+        _check_cancel()
+        try:
+            _pull_once(body, on_progress)
+            return
+        except dl.DownloadCancelled:
+            raise
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError,
+                ConnectionError, OSError) as exc:
+            if attempt == PULL_RETRIES:
+                raise OllamaError(f"ExprError.pull_failed:{exc}") from None
+            if _cancel.wait(min(2 ** (attempt + 1), 30)):
+                raise dl.DownloadCancelled("ExprError.cancelled") from None
+
+
+def _pull_once(body: bytes, on_progress: Callable[[dict], None] | None) -> None:
     req = urllib.request.Request(
         f"{HOST}/api/pull", data=body,
         headers={"Content-Type": "application/json"}, method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            for raw in resp:
-                if should_stop and should_stop():
-                    return
-                if not raw.strip():
-                    continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("error"):
-                    raise OllamaError(f"Ollama: {event['error']}")
-                if on_progress:
-                    total = event.get("total") or 0
-                    done = event.get("completed") or 0
-                    on_progress({
-                        "stage": event.get("status", "download"),
-                        "percent": int(done * 100 / total) if total else 0,
-                        "completed_gb": round(done / 1024 ** 3, 2),
-                        "total_gb": round(total / 1024 ** 3, 2),
-                    })
-    except urllib.error.URLError as exc:
-        raise OllamaError(f"ExprError.pull_failed:{exc.reason}") from None
+    succeeded = False
+    with urllib.request.urlopen(req, timeout=PULL_TIMEOUT) as resp:
+        for raw in resp:
+            _check_cancel()
+            if not raw.strip():
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if event.get("error"):
+                raise OllamaError(f"Ollama: {event['error']}")
+            finished = event.get("status") == "success"
+            succeeded = succeeded or finished
+            if on_progress:
+                total = event.get("total") or 0
+                done = event.get("completed") or 0
+                on_progress({
+                    "stage": event.get("status", "download"),
+                    "percent": 100 if finished else (int(done * 100 / total) if total else 0),
+                    "completed_gb": round(done / 1024 ** 3, 2),
+                    "total_gb": round(total / 1024 ** 3, 2),
+                })
+    if not succeeded:
+        raise http.client.IncompleteRead(b"")
 
 
 def delete_model(name: str) -> dict:
+
     try:
         body = json.dumps({"model": name}).encode()
         req = urllib.request.Request(

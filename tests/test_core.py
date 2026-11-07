@@ -207,3 +207,108 @@ def test_invalid_range_rejected():
 def test_autoscale_python_floats():
     result = grapher.autoscale(["x^2"], -5, 5)
     assert all(type(v) is float for v in result.values())
+
+
+def test_trigonometric_equation_solved_by_substitution():
+    """sin^2(x) - 5sin(x) + 6 = 0 has no real root: report that, do not fail to parse."""
+    from euler.core import solver
+
+    impossible = solver.solve_equation("sin^2(x)-5*sin(x)+6=0")
+    assert impossible["error"] == "ExprError.no_solution"
+
+    solvable = solver.solve_equation("sin^2(x)-3*sin(x)+2=0")
+    assert solvable["ok"]
+    assert "k" in solvable["text"]
+
+    out_of_range = solver.solve_equation("sin(x)=2")
+    assert out_of_range["error"] == "ExprError.no_solution"
+
+
+def test_logarithm_with_base_is_a_ratio_of_logs():
+    """log_2(8) = 3: the plain-text form the field produces must evaluate."""
+    from euler.core import solver
+
+    assert solver.evaluate("(log(8)/log(2))")["text"] == "3"
+    assert solver.evaluate("(log(100)/log(10))")["text"] == "2"
+
+
+def test_logarithm_keys_have_distinct_bases():
+    """The log key is base 10 (its inverse is 10^x); ln is natural."""
+    from euler.core import solver
+
+    assert solver.evaluate("log(100)")["text"] == "2"
+    assert "log(8)" in solver.evaluate("ln(8)")["text"]
+    assert solver.evaluate("log10(100)")["text"] == "2"
+
+
+def test_empty_solution_set_is_an_error_not_a_success():
+    """ok=True with the text "ExprError.no_solution" printed a raw key."""
+    from euler.core import solver
+
+    for equation in ("x+1=x+2", "sin(x)=2"):
+        result = solver.solve_equation(equation)
+        assert result["ok"] is False, equation
+        assert result["error"] == "ExprError.no_solution", equation
+
+
+def test_quadratic_without_real_roots_reports_the_complex_pair():
+    from euler.core import solver
+
+    result = solver.solve_equation("x^2+1=0")
+    assert result["ok"] is True
+    assert result["note"] == "solution.complex"
+    assert "I" in result["text"]
+
+
+def _contrast(a: str, b: str) -> float:
+    def lum(colour: str) -> float:
+        colour = colour.lstrip("#")
+        r, g, bl = (int(colour[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl)
+
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_key_palettes_keep_labels_readable():
+    """Each theme pairs its fills with one label colour at 4.5:1 or better."""
+    import re
+    from pathlib import Path
+
+    css = Path(__file__).resolve().parent.parent / "app" / "web" / "theme.css"
+    text = css.read_text(encoding="utf-8")
+
+    # every fill, in order, together with the label declared after it
+    blocks = re.findall(
+        r"(--key-(?:fn|num|op|ac|const|var|mx|run):\s*#[0-9a-f]{6};.*?--key-label:\s*#[0-9a-fA-F]{6};)",
+        text, re.S)
+    assert len(blocks) == 3, len(blocks)  # light, [data-theme=dark], media query
+
+    for block in blocks:
+        ink = re.search(r"--key-label:\s*(#[0-9a-fA-F]{6})", block).group(1)
+        fills = re.findall(r"--key-(?:fn|num|op|ac|const|var|mx|run):\s*(#[0-9a-f]{6})", block)
+        assert fills, block[:40]
+        for colour in fills:
+            assert _contrast(ink, colour) >= 4.5, (ink, colour)
+
+
+def test_one_label_colour_for_every_key_group():
+    """Coloured labels on coloured fills were the "grey keys" complaint."""
+    from pathlib import Path
+
+    css = Path(__file__).resolve().parent.parent / "app" / "web" / "theme.css"
+    text = css.read_text(encoding="utf-8")
+    groups = [line for line in text.splitlines()
+              if line.strip().startswith(".key.k-") and "background" in line
+              and "hover" not in line and ".inverse" not in line]
+    assert len(groups) == 8, groups
+    for line in groups:
+        assert "color: var(--key-label)" in line, line
+
+    # No earlier rule may set a different label colour for a key group: the
+    # dark-label rules that survived the palette change were the bug.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(".key.k-") and "background" in stripped:
+            assert "--key-text-d" not in stripped, stripped

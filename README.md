@@ -6,7 +6,7 @@
 
 **A symbolic calculator with a local AI tutor. No account, no cloud, no telemetry.**
 
-[![Version](https://img.shields.io/badge/version-5.0.3-c96b7a?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-5.1.17-c96b7a?style=flat-square)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-8f4c56?style=flat-square)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-4b8bbe?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-6fc79a?style=flat-square)](LICENSE.txt)

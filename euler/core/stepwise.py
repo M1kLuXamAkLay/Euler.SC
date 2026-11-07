@@ -45,6 +45,27 @@ def _tex(value) -> str:
         return str(value)
 
 
+def _polynomial_tex(parts: list[tuple]) -> str:
+    """Signed sum of (coefficient, body) pairs; a unit coefficient is left implicit."""
+    text = ""
+    for coefficient, body in parts:
+        if coefficient == 0:
+            continue
+        negative = coefficient.could_extract_minus_sign()
+        magnitude = -coefficient if negative else coefficient
+        if body and magnitude == 1:
+            term = body
+        elif body:
+            term = f"{_tex(magnitude)}\\,{body}"
+        else:
+            term = _tex(magnitude)
+        if not text:
+            text = f"-{term}" if negative else term
+        else:
+            text += f" - {term}" if negative else f" + {term}"
+    return text or "0"
+
+
 def _msg_line(key: str) -> dict:
     """A step that is a message, not a formula."""
     return {"n": 0, "text": key, "latex": None}
@@ -79,7 +100,7 @@ def _linear(left: sp.Expr, right: sp.Expr, var: sp.Symbol) -> list[dict]:
         _step(2, "step.cap.coefficient",
               f"a = {_tex(coeff)},\\quad b = {_tex(const)}"),
         _step(3, "step.cap.subtract",
-              f"{_tex(coeff)}\\,{var.name} = {_tex(-const)}"),
+              f"{_polynomial_tex([(coeff, var.name)])} = {_tex(-const)}"),
         _step(4, "step.cap.divide",
               f"{var.name} = {_tex(sp.simplify(-const / coeff))}"),
     ]
@@ -97,7 +118,7 @@ def _quadratic(left: sp.Expr, right: sp.Expr, var: sp.Symbol) -> list[dict]:
 
     steps = [
         _step(1, "step.cap.standard_form",
-              f"{_tex(a)}\\,{var.name}^2 + {_tex(b)}\\,{var.name} + {_tex(c)} = 0"),
+              f"{_polynomial_tex([(a, var.name + '^{2}'), (b, var.name), (c, '')])} = 0"),
         _step(2, "step.cap.coefficients",
               f"a = {_tex(a)},\\quad b = {_tex(b)},\\quad c = {_tex(c)}"),
         _step(3, "step.cap.discriminant",
@@ -227,8 +248,8 @@ def _exponential_steps(left, right, var) -> list[dict]:
     if base is None:
         return []
 
-    steps.append(_step(2, "The unknown is in the exponent: take the logarithm "
-                          "of both sides", f"\\ln\\left({_tex(base)}^{{{var.name}}}\\right) = \\ln\\left({_tex(other)}\\right)"))
+    steps.append(_step(2, "step.cap.exp_unknown",
+                       f"\\ln\\left({_tex(base)}^{{{var.name}}}\\right) = \\ln\\left({_tex(other)}\\right)"))
     steps.append(_step(3, "step.cap.bring_down",
                        f"{var.name}\\,\\ln\\left({_tex(base)}\\right) = \\ln\\left({_tex(other)}\\right)"))
     value = sp.simplify(sp.log(other) / sp.log(base))
@@ -271,11 +292,11 @@ def _substitution_steps(left, right, var) -> list[dict]:
         steps = [
             _step(1, "step.cap.substitute_var", f"t = {_tex(candidate)}"),
             _step(2, "step.cap.rewrite",
-                  f"{_tex(a)}\\,t^2 + {_tex(b)}\\,t + {_tex(c)} = 0"),
+                  f"{_polynomial_tex([(a, 't^{2}'), (b, 't'), (c, '')])} = 0"),
             _step(3, "step.cap.discriminant", f"D = b^2 - 4ac = {_tex(disc)}"),
         ]
         if disc.is_negative:
-            steps.append(_step(4, "Discriminant is negative: no real t", "D < 0"))
+            steps.append(_step(4, "step.cap.negative_disc", "D < 0"))
             return steps
 
         root = sp.sqrt(disc)
@@ -286,13 +307,13 @@ def _substitution_steps(left, right, var) -> list[dict]:
 
         for index, (value, label) in enumerate(((t1, "t_1"), (t2, "t_2")), start=5):
             if not (-1 <= float(sp.N(value)) <= 1):
-                steps.append(_step(index, f"{label} = {_tex(value)} is outside [-1; 1]",
-                                   f"{_tex(candidate)} = {_tex(value)}\\;\\text{{no real solutions}}"))
+                steps.append(_step(index, "step.cap.out_of_range",
+                                   f"{label} = {_tex(value)} \\notin [-1,\\,1]"))
                 continue
             solutions = sp.solve(sp.Eq(candidate, value), var)
             if solutions:
                 joined = ",\\quad ".join(f"{var.name} = {_tex(r)}" for r in solutions[:2])
-                steps.append(_step(index, f"Back-substitute {label}",
+                steps.append(_step(index, "step.cap.back_substitute",
                                    f"{_tex(candidate)} = {_tex(value)} \\Rightarrow {joined}"))
         steps.append(_step(len(steps) + 1, "step.cap.period",
                            f"+ 2\\pi k,\\; k \\in \\mathbb{{Z}}"))
@@ -652,6 +673,68 @@ def _split_relation(text: str):
 
 
 
+_INEQ_OPS = ("<=", ">=", "<", ">")
+_INEQ_TEX = {"<": "<", "<=": "\\le", ">": ">", ">=": "\\ge"}
+_INEQ_SP = {"<": sp.Lt, "<=": sp.Le, ">": sp.Gt, ">=": sp.Ge}
+_MAX_INTERVALS = 10
+
+
+def _roots_tex(roots, name: str) -> str:
+    ordered = sorted(roots, key=lambda r: float(sp.re(r)))[:6]
+    if len(ordered) == 1:
+        return f"{name} = {_tex(ordered[0])}"
+    return ",\\quad ".join(f"{name}_{{{i}}} = {_tex(r)}" for i, r in enumerate(ordered, 1))
+
+
+def _real_roots(expr, var) -> list:
+    return [r for r in sp.solve(expr, var) if r.is_real]
+
+
+def _inequality_steps(text: str) -> dict | None:
+    """f(x) <op> 0: critical points, sign on each interval, then the solution set."""
+    op = next((candidate for candidate in _INEQ_OPS if candidate in text), None)
+    if op is None:
+        return None
+    left, right = text.split(op, 1)
+    var = sp.Symbol("x", real=True)
+    f = sp.together(sp.expand(parse(left, "x") - parse(right, "x")))
+    if var not in f.free_symbols:
+        return None
+
+    numerator, denominator = sp.fraction(f)
+    critical = sorted({*_real_roots(numerator, var), *_real_roots(denominator, var)}, key=float)
+    steps = [_step(1, "step.cap.move_one_side", f"{_tex(f)} {_INEQ_TEX[op]} 0")]
+    if critical:
+        steps.append(_step(2, "step.cap.critical_points", _roots_tex(critical, var.name)))
+
+        bounds = [-sp.oo, *critical, sp.oo]
+        intervals = list(zip(bounds[:-1], bounds[1:]))
+        if len(intervals) <= _MAX_INTERVALS:
+            for a, b in intervals:
+                if a == -sp.oo:
+                    probe = critical[0] - 1
+                elif b == sp.oo:
+                    probe = critical[-1] + 1
+                else:
+                    probe = (a + b) / 2
+                value = float(sp.N(f.subs(var, probe)))
+                if value == 0 or value != value:
+                    continue
+                sign = ">" if value > 0 else "<"
+                steps.append(_step(len(steps) + 1, "step.cap.sign_on_interval",
+                                   f"{_tex(sp.Interval.open(a, b))}\\colon\\quad f\\left({_tex(probe)}\\right) {sign} 0"))
+
+    from .solver import _format_set_latex
+    try:
+        solution = sp.solve_univariate_inequality(_INEQ_SP[op](f, 0), var, relational=False)
+    except (NotImplementedError, ValueError, TypeError):
+        solution = None
+    answer = _format_set_latex(solution, var.name) if solution is not None else None
+    if answer is not None:
+        steps.append(_step(len(steps) + 1, "step.cap.ineq_solution", answer))
+    return _result("step.title.inequality", steps, latex=answer)
+
+
 def steps(expression: str, kind: str = "auto", extra: list[str] | None = None) -> dict:
     """Produce a worked solution for the given expression."""
     if not expression or not expression.strip():
@@ -667,6 +750,10 @@ def steps(expression: str, kind: str = "auto", extra: list[str] | None = None) -
         return _result("step.title.limit", _limit_steps(text, "0"))
     if kind == "system" and extra:
         return _system_steps([text, *extra])
+
+    inequality = _inequality_steps(text)
+    if inequality is not None:
+        return inequality
 
     if "=" in text:
         left, right = text.split("=", 1)
@@ -704,8 +791,8 @@ def steps(expression: str, kind: str = "auto", extra: list[str] | None = None) -
         roots = sp.solve(sp.Eq(lhs, rhs), var)
         return _result("step.title.equation", [
             _step(1, "step.cap.move_one_side", f"{_tex(sp.expand(lhs - rhs))} = 0"),
-            _step(2, "Solve for the variable",
-                  ",\\quad ".join(f"{var.name} = {_tex(r)}" for r in roots[:6])),
+            _step(2, "step.cap.solve_variable", _roots_tex(roots, var.name))
+            if roots else _step(2, "step.cap.no_roots", "\\varnothing"),
         ])
 
     if "\u222b" in text or text.lower().startswith("integrate"):

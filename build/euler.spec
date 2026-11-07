@@ -55,7 +55,6 @@ hiddenimports = [
 # removes roughly 40 MB from the bundle.
 excludes = [
     "tkinter",
-    "matplotlib",
     "PyQt5", "PyQt6", "PySide2", "PySide6",
     "IPython", "jupyter", "notebook",
     "pytest", "setuptools", "pip",

@@ -21,7 +21,7 @@ from typing import Any
 # Every key the interface may persist. Unknown keys are dropped on load so a
 # stale or hand-edited file cannot inject unexpected state.
 DEFAULTS: dict[str, Any] = {
-    "language": "ru",
+    "language": "",
     "model": "",
     "temperature": 0.3,
     "angle_unit": "deg",
@@ -39,8 +39,13 @@ DEFAULTS: dict[str, Any] = {
     "calculus": {"fn": "x^2-1", "point": "1", "lower": "0", "upper": "1"},
     "analysis": {"fn": "x^3-3x", "interval": "-2; 2"},
     "graph": {"x_min": -5, "x_max": 5, "y_min": -10, "y_max": 10},
+    "graph_functions": ["x^3-3x"],
+    "graph_marked": 0,
+    "analysis_interval": "-2; 2",
     "equations": ["x^2-5x+6=0"],
 }
+
+INSTALLER_LANGUAGES = ("ru", "en", "zh", "es", "fr", "pt")
 
 _lock = threading.Lock()
 
@@ -83,23 +88,41 @@ def settings_path() -> Path:
     return data_dir() / "settings.json"
 
 
-def load() -> dict:
-    """Read settings, falling back to defaults on any problem."""
-    path = settings_path()
-    if not path.exists():
-        return dict(DEFAULTS)
-
+def _installer_language() -> str:
+    """Language the installer wrote to HKCU, or an empty string."""
+    if sys.platform != "win32":
+        return ""
     try:
-        with path.open(encoding="utf-8") as handle:
-            stored = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULTS)
+        import winreg
 
-    if not isinstance(stored, dict):
-        return dict(DEFAULTS)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\EulerSC") as key:
+            value, _kind = winreg.QueryValueEx(key, "Language")
+    except OSError:
+        return ""
+    return value if value in INSTALLER_LANGUAGES else ""
+
+
+def load() -> dict:
+    """Read settings, falling back to defaults on any problem.
+
+    On first launch there is no stored language yet, so the one picked in the
+    installer is used.
+    """
+    stored: dict = {}
+    path = settings_path()
+    if path.exists():
+        try:
+            with path.open(encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                stored = loaded
+        except (OSError, json.JSONDecodeError):
+            stored = {}
 
     merged = dict(DEFAULTS)
     merged.update({key: value for key, value in stored.items() if key in DEFAULTS})
+    if not stored.get("language"):
+        merged["language"] = _installer_language() or DEFAULTS["language"]
     return merged
 
 
@@ -128,4 +151,4 @@ def save(patch: dict) -> dict:
     return {"ok": True, "settings": current}
 
 
-__all__ = ["load", "save", "data_dir", "settings_path", "DEFAULTS"]
+__all__ = ["load", "save", "data_dir", "settings_path", "DEFAULTS", "INSTALLER_LANGUAGES"]

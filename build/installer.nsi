@@ -21,7 +21,7 @@ Unicode true
 !define APP_NAME      "Euler.SC"
 !define APP_EXE       "EulerSC.exe"
 !define APP_PUBLISHER "Euler Project"
-!define APP_VERSION   "5.0.3"
+!define APP_VERSION   "5.1.17"
 !define APP_URL       "https://github.com/euler-project/euler"
 !define REG_UNINST    "Software\Microsoft\Windows\CurrentVersion\Uninstall\EulerSC"
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -57,7 +57,6 @@ ShowUninstDetails show
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "$(LaunchApp)"
-!define MUI_FINISHPAGE_SHOWREADME ""
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -66,6 +65,10 @@ ShowUninstDetails show
 
 !insertmacro MUI_LANGUAGE "Russian"
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "Spanish"
+!insertmacro MUI_LANGUAGE "French"
+!insertmacro MUI_LANGUAGE "PortugueseBR"
 
 ; Language strings used by the installer's own pages
 LangString LaunchApp     ${LANG_RUSSIAN} "Запустить ${APP_NAME}"
@@ -82,6 +85,36 @@ LangString SecAsseName   ${LANG_RUSSIAN} "Связывать файлы .tex"
 LangString SecAsseName   ${LANG_ENGLISH} "Associate .tex files"
 LangString SecAsseDesc   ${LANG_RUSSIAN} "Открывать .tex в приложении по двойному щелчку."
 LangString SecAsseDesc   ${LANG_ENGLISH} "Open .tex files with the application."
+
+; ---- additional installer languages ---------------------------------------
+LangString LaunchApp     ${LANG_SIMPCHINESE} "启动 ${APP_NAME}"
+LangString LaunchApp     ${LANG_SPANISH}     "Iniciar ${APP_NAME}"
+LangString LaunchApp     ${LANG_FRENCH}      "Lancer ${APP_NAME}"
+LangString LaunchApp     ${LANG_PORTUGUESEBR} "Iniciar ${APP_NAME}"
+LangString SecAppName    ${LANG_SIMPCHINESE} "应用程序（必需）"
+LangString SecAppName    ${LANG_SPANISH}     "Aplicación (obligatoria)"
+LangString SecAppName    ${LANG_FRENCH}      "Application (obligatoire)"
+LangString SecAppName    ${LANG_PORTUGUESEBR} "Aplicativo (obrigatório)"
+LangString SecAppDesc    ${LANG_SIMPCHINESE} "核心、界面和参考手册。"
+LangString SecAppDesc    ${LANG_SPANISH}     "Motor, interfaz y referencia."
+LangString SecAppDesc    ${LANG_FRENCH}      "Moteur, interface et référence."
+LangString SecAppDesc    ${LANG_PORTUGUESEBR} "Núcleo, interface e referência."
+LangString SecShortName  ${LANG_SIMPCHINESE} "快捷方式"
+LangString SecShortName  ${LANG_SPANISH}     "Accesos directos"
+LangString SecShortName  ${LANG_FRENCH}      "Raccourcis"
+LangString SecShortName  ${LANG_PORTUGUESEBR} "Atalhos"
+LangString SecShortDesc  ${LANG_SIMPCHINESE} "桌面和“开始”菜单快捷方式。"
+LangString SecShortDesc  ${LANG_SPANISH}     "Accesos directos en el escritorio y en el menú Inicio."
+LangString SecShortDesc  ${LANG_FRENCH}      "Raccourcis sur le bureau et dans le menu Démarrer."
+LangString SecShortDesc  ${LANG_PORTUGUESEBR} "Atalhos na área de trabalho e no menu Iniciar."
+LangString SecAsseName   ${LANG_SIMPCHINESE} "关联 .tex 文件"
+LangString SecAsseName   ${LANG_SPANISH}     "Asociar archivos .tex"
+LangString SecAsseName   ${LANG_FRENCH}      "Associer les fichiers .tex"
+LangString SecAsseName   ${LANG_PORTUGUESEBR} "Associar arquivos .tex"
+LangString SecAsseDesc   ${LANG_SIMPCHINESE} "双击时用本应用打开 .tex 文件。"
+LangString SecAsseDesc   ${LANG_SPANISH}     "Abrir archivos .tex con la aplicación al hacer doble clic."
+LangString SecAsseDesc   ${LANG_FRENCH}      "Ouvrir les fichiers .tex avec l'application par double-clic."
+LangString SecAsseDesc   ${LANG_PORTUGUESEBR} "Abrir arquivos .tex com o aplicativo ao clicar duas vezes."
 
 ; ---------------------------------------------------------------------------
 ; Remembering the chosen language so the uninstaller speaks it too
@@ -102,11 +135,26 @@ Section "$(SecAppName)" SecApp
 
   ; Seed the interface language from the installer choice: the app reads this
   ; key on first launch and skips its own language question.
-  ${If} $LANGUAGE == ${LANG_RUSSIAN}
-    WriteRegStr HKCU "Software\EulerSC" "Language" "ru"
-  ${Else}
-    WriteRegStr HKCU "Software\EulerSC" "Language" "en"
-  ${EndIf}
+  ${Switch} $LANGUAGE
+    ${Case} ${LANG_RUSSIAN}
+      StrCpy $R0 "ru"
+      ${Break}
+    ${Case} ${LANG_SIMPCHINESE}
+      StrCpy $R0 "zh"
+      ${Break}
+    ${Case} ${LANG_SPANISH}
+      StrCpy $R0 "es"
+      ${Break}
+    ${Case} ${LANG_FRENCH}
+      StrCpy $R0 "fr"
+      ${Break}
+    ${Case} ${LANG_PORTUGUESEBR}
+      StrCpy $R0 "pt"
+      ${Break}
+    ${Default}
+      StrCpy $R0 "en"
+  ${EndSwitch}
+  WriteRegStr HKCU "Software\EulerSC" "Language" $R0
 
   WriteRegStr HKCU "Software\EulerSC" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\EulerSC" "Version" "${APP_VERSION}"
@@ -264,3 +312,7 @@ SectionEnd
 ; ---------------------------------------------------------------------------
 LangString AskRemoveOllama ${LANG_RUSSIAN} "Удалить также Ollama и все скачанные модели?$\r$\n$\r$\nМодели занимают несколько гигабайт; при повторной установке их придётся скачать заново.$\r$\n$\r$\nНажмите «Нет», чтобы сохранить Ollama для других программ."
 LangString AskRemoveOllama ${LANG_ENGLISH} "Also remove Ollama and every downloaded model?$\r$\n$\r$\nThe models take several gigabytes and would have to be downloaded again.$\r$\n$\r$\nChoose No to keep Ollama for other programs."
+LangString AskRemoveOllama ${LANG_SIMPCHINESE} "同时删除 Ollama 及所有已下载的模型？$\r$\n$\r$\n模型体积达数 GB，需要重新下载。$\r$\n$\r$\n选择“否”以保留 Ollama 供其他程序使用。"
+LangString AskRemoveOllama ${LANG_SPANISH} "¿Eliminar también Ollama y todos los modelos descargados?$\r$\n$\r$\nLos modelos ocupan varios GB y habría que descargarlos de nuevo.$\r$\n$\r$\nElija No para conservar Ollama para otros programas."
+LangString AskRemoveOllama ${LANG_FRENCH} "Supprimer aussi Ollama et tous les modèles téléchargés ?$\r$\n$\r$\nLes modèles occupent plusieurs Go et devraient être téléchargés à nouveau.$\r$\n$\r$\nChoisissez Non pour conserver Ollama pour d'autres programmes."
+LangString AskRemoveOllama ${LANG_PORTUGUESEBR} "Remover também o Ollama e todos os modelos baixados?$\r$\n$\r$\nOs modelos ocupam vários GB e teriam de ser baixados novamente.$\r$\n$\r$\nEscolha Não para manter o Ollama para outros programas."

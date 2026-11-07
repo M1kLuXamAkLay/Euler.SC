@@ -1,21 +1,21 @@
 """Export a solution to PDF or LaTeX.
 
-PDF is produced without external binaries: the document is written as a minimal
-PDF by hand (using the built-in Helvetica core font for ASCII and a Type3-free
-fallback for mathematics), which keeps the installer free of ReportLab or a
-LaTeX distribution.
+The solution PDF is laid out with matplotlib, which renders formulas with its
+built-in math engine (mathtext), so no LaTeX installation is needed. The graph
+PDF is written by hand, which keeps that path free of extra dependencies.
 
 Two exporters:
 
 ``to_latex``   a self-contained ``.tex`` file, ready for Overleaf or a local
               ``pdflatex`` run. This is what a student hands in.
-``to_pdf``     a paginated PDF with the same content, generated here.
+``to_pdf``     a paginated PDF with the same content and typeset formulas.
 
 Both accept the ``payload`` shape the interface already has:
 ``{"title": str, "steps": [{"n", "text", "latex"}], "answer": str}``.
 """
 from __future__ import annotations
 
+import base64
 import re
 import textwrap
 import zlib
@@ -294,99 +294,97 @@ def _wrap_width(text: str, font, size: float, limit: float) -> list[str]:
     return lines or [""]
 
 
-def _hex_text(text: str, font) -> str:
-    """Glyph ids as a PDF hex string, the form Identity-H expects."""
-    ids = [font.glyph(ch) for ch in text]
-    return "<" + "".join(f"{glyph:04X}" for glyph in ids) + ">"
+STEP_TITLES = {
+    "ru": "Шаг", "en": "Step", "zh": "步骤", "es": "Paso",
+    "fr": "Étape", "bn": "ধাপ", "pt": "Passo",
+}
+
+ACCENT = (0.56, 0.30, 0.34)
+PANEL = (0.99, 0.96, 0.97)
+INK = (0.18, 0.11, 0.13)
+MUTED = (0.43, 0.31, 0.34)
+FOOTER_Y = MARGIN - 26
+BRAND = "Euler.SC"
 
 
-def _paginate(lines: list[tuple[str, float, bool]], font) -> list[list[tuple]]:
-    """Split the flow into pages, wrapping each entry to the text width."""
-    usable = PAGE_W - 2 * MARGIN
-    pages: list[list[tuple]] = []
-    page: list[tuple] = []
-    y = PAGE_H - MARGIN
-
-    for text, size, bold in lines:
-        for piece in _wrap_width(text, font, size, usable):
-            step = size * 1.55
-            if y - step < MARGIN:
-                pages.append(page)
-                page = []
-                y = PAGE_H - MARGIN
-            page.append((piece, size, bold, y))
-            y -= step
-
-    pages.append(page)
-    return pages
+def _hex_glyphs(glyphs: list[int]) -> str:
+    return "<" + "".join(f"{glyph:04X}" for glyph in glyphs) + ">"
 
 
-def _content_stream(page: list[tuple], font) -> str:
-    """Page content: every string written as glyph ids."""
-    out = []
-    for text, size, _bold, y in page:
-        if not text:
-            continue
-        out.append(
-            f"BT /F1 {size} Tf 1 0 0 1 {MARGIN} {y:.1f} Tm {_hex_text(text, font)} Tj ET")
-    return "\n".join(out)
+class _Canvas:
+    """Page content streams, plus the glyph-to-character map for the ToUnicode table."""
+
+    def __init__(self, font) -> None:
+        self.font = font
+        self.used: set[int] = set()
+        self.chars: dict[int, str] = {}
+        self.pages: list[list[str]] = [[]]
+        self.y = PAGE_H - MARGIN
+
+    def new_page(self) -> None:
+        self.pages.append([])
+        self.y = PAGE_H - MARGIN
+
+    def ensure(self, height: float) -> None:
+        if self.y - height < MARGIN:
+            self.new_page()
+
+    def text(self, x: float, y: float, size: float, value: str,
+             bold: bool = False, color: tuple = INK) -> None:
+        glyphs = []
+        for ch in value:
+            glyph = self.font.glyph(ch)
+            if glyph:
+                self.used.add(glyph)
+                self.chars.setdefault(glyph, ch)
+            glyphs.append(glyph)
+        r, g, b = color
+        mode, width = ("2 Tr", 0.35) if bold else ("0 Tr", 0.0)
+        self.pages[-1].append(
+            f"{r:.3f} {g:.3f} {b:.3f} rg {r:.3f} {g:.3f} {b:.3f} RG {width} w {mode} "
+            f"BT /F1 {size} Tf 1 0 0 1 {x:.1f} {y:.1f} Tm {_hex_glyphs(glyphs)} Tj ET 0 Tr")
+
+    def rect(self, x: float, y: float, w: float, h: float,
+             fill: tuple | None = None, stroke: tuple | None = None, line: float = 0.8) -> None:
+        parts = [f"{line} w"]
+        if fill:
+            parts.append("%.3f %.3f %.3f rg" % fill)
+        if stroke:
+            parts.append("%.3f %.3f %.3f RG" % stroke)
+        parts.append(f"{x:.1f} {y:.1f} {w:.1f} {h:.1f} re")
+        parts.append("B" if fill and stroke else ("f" if fill else "S"))
+        self.pages[-1].append(" ".join(parts))
+
+    def rule(self, x1: float, x2: float, y: float, color: tuple, line: float = 1.0) -> None:
+        self.pages[-1].append(
+            "%.1f w %.3f %.3f %.3f RG %.1f %.1f m %.1f %.1f l S"
+            % (line, *color, x1, y, x2, y))
+
+    def paragraph(self, value: str, size: float, bold: bool = False,
+                  color: tuple = INK, indent: float = 0.0) -> None:
+        leading = size * 1.45
+        for piece in _wrap_width(value, self.font, size, PAGE_W - 2 * MARGIN - indent):
+            self.ensure(leading)
+            self.y -= leading
+            self.text(MARGIN + indent, self.y, size, piece, bold, color)
 
 
-def to_pdf(payload: dict) -> bytes:
-    """A PDF with an embedded Unicode font.
+def _footer(canvas: _Canvas, index: int, total: int) -> None:
+    canvas.pages[index].append(
+        "%.1f w %.3f %.3f %.3f RG %.1f %.1f m %.1f %.1f l S"
+        % (0.6, *PANEL, MARGIN, FOOTER_Y + 12, PAGE_W - MARGIN, FOOTER_Y + 12))
+    saved = canvas.pages
+    canvas.pages = [saved[index]]
+    canvas.text(MARGIN, FOOTER_Y, 8, BRAND, color=MUTED)
+    number = f"{index + 1} / {total}"
+    canvas.text(PAGE_W - MARGIN - 7 * len(number), FOOTER_Y, 8, number, color=MUTED)
+    canvas.pages = saved
 
-    The core Helvetica font can only represent Latin-1, so a Russian, Chinese or
-    Bengali heading raised ``UnicodeEncodeError`` and the export failed. A
-    TrueType font is embedded instead and every glyph is addressed by its
-    numeric id through a ``Type0`` / ``Identity-H`` font, which needs no
-    encoding table at all.
-    """
-    from .pdf_font import FontError, load_font
 
-    title = _strip_latex(payload.get("title") or "Solution")
-    steps = payload.get("steps") or []
-    answer = _strip_latex(payload.get("answer") or "")
-    heading = ANSWER_TITLES.get(str(payload.get("language", "en"))[:2], "Answer")
-
-    # Collect every glyph first: the font choice depends on the alphabet used
-    collected = [title, heading, answer]
-    for step in steps:
-        collected.append(_strip_latex(step.get("latex") or step.get("text", "")))
-
-    try:
-        font = load_font("".join(collected))
-    except FontError:
-        # Last resort: strip to Latin-1 so the file is still produced
-        font = None
-
-    lines: list[tuple[str, float, bool]] = [(title, 16.0, True), ("", 8.0, False)]
-    for step in steps:
-        body = _strip_latex(step.get("latex") or step.get("text", ""))
-        prefix = f"{step.get('n')}. " if step.get("n") else ""
-        lines.append((prefix + body, 11.0, False))
-        lines.append(("", 5.0, False))
-
-    if answer:
-        lines.append(("", 6.0, False))
-        lines.append((heading, 13.0, True))
-        lines.append((answer, 11.0, False))
-
-    if font is None:
-        # Degraded path: no Unicode font found, keep the document Latin-1 only
-        lines = [(text.encode("latin-1", "replace").decode("latin-1"), size, bold)
-                 for text, size, bold in lines]
-        return _pdf_ascii(lines)
-
-    pages = _paginate(lines, font)
-
-    # Glyphs actually used, so the /W array stays small
-    used: set[int] = set()
-    for page in pages:
-        for text, _size, _bold, _y in page:
-            used.update(font.glyph(ch) for ch in text)
-    used.discard(0)
-
-    widths = " ".join(f"{glyph} [{font.width(glyph)}]" for glyph in sorted(used))
+def _document(pages: list[list[str]], font, canvas: _Canvas,
+              image: tuple[int, int, bytes] | None = None) -> bytes:
+    """Assemble a PDF with a subset Unicode font and an optional RGB image."""
+    from .pdf_font import subset_font
 
     objects: list[bytes] = []
 
@@ -394,93 +392,310 @@ def to_pdf(payload: dict) -> bytes:
         objects.append(body)
         return len(objects)
 
-    # Reserve object numbers first, then fill them in dependency order.
-    # Every number comes from ``len(objects) + 1`` at the moment of the call, so
-    # no two objects can ever receive the same id: computing a range in advance
-    # and then inserting the ToUnicode map gave the first page the same number
-    # as the map, and the page silently disappeared.
     catalog = add(b"")
     pages_obj = add(b"")
     type0 = add(b"")
     cid_font = add(b"")
     descriptor = add(b"")
     font_file = add(b"")
-    cmap_object = add(b"")        # reserved here, filled at the end
+    cmap_object = add(b"")
+    image_object = add(b"") if image else 0
+    page_numbers = [add(b"") for _ in pages]
+    content_numbers = [add(b"") for _ in pages]
 
-    page_numbers = []
-    content_numbers = []
-    for _page in pages:
-        page_numbers.append(add(b""))
-        content_numbers.append(add(b""))
-
-    objects[catalog - 1] = (
-        f"<< /Type /Catalog /Pages {pages_obj} 0 R >>").encode()
-
+    objects[catalog - 1] = f"<< /Type /Catalog /Pages {pages_obj} 0 R >>".encode()
     kids = " ".join(f"{number} 0 R" for number in page_numbers)
-    objects[pages_obj - 1] = (
-        f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>").encode()
-
-    # Glyph id -> character, so the text stays searchable after export
-    glyph_to_char: dict[int, str] = {}
-    for page in pages:
-        for text, _size, _bold, _y in page:
-            for character in text:
-                glyph = font.glyph(character)
-                if glyph:
-                    glyph_to_char.setdefault(glyph, character)
+    objects[pages_obj - 1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode()
 
     objects[type0 - 1] = (
         f"<< /Type /Font /Subtype /Type0 /BaseFont /{font.name} "
         f"/Encoding /Identity-H /DescendantFonts [{cid_font} 0 R] "
         f"/ToUnicode {cmap_object} 0 R >>").encode()
 
+    widths = " ".join(f"{glyph} [{font.width(glyph)}]" for glyph in sorted(canvas.used))
     objects[cid_font - 1] = (
         f"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{font.name} "
         f"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
         f"/FontDescriptor {descriptor} 0 R /DW 1000 /W [{widths}] "
         f"/CIDToGIDMap /Identity >>").encode()
 
-    scale = 1000 / font.units_per_em
     objects[descriptor - 1] = (
         f"<< /Type /FontDescriptor /FontName /{font.name} /Flags 32 "
-        f"/FontBBox [0 -300 1000 1000] /ItalicAngle 0 /Ascent {int(900 * 1000 / 1000)} "
+        f"/FontBBox [0 -300 1000 1000] /ItalicAngle 0 /Ascent 900 "
         f"/Descent -250 /CapHeight 700 /StemV 80 /FontFile2 {font_file} 0 R >>").encode()
 
-    # Only the glyphs on the page are embedded. A full CJK face is 13 MB; the
-    # subset for a page of formulas is a few hundred kilobytes.
-    from .pdf_font import subset_font
-
-    subset = subset_font(font, used)
+    subset = subset_font(font, canvas.used)
     compressed_font = zlib.compress(subset, 9)
     objects[font_file - 1] = (
         f"<< /Length {len(compressed_font)} /Length1 {len(subset)} "
         f"/Filter /FlateDecode >>\nstream\n".encode()
         + compressed_font + b"\nendstream")
 
-    # Fill the reserved slots; appending here would create fresh object numbers
-    # and leave /Kids pointing at empty placeholders.
-    for page_index, page in enumerate(pages):
-        number = page_numbers[page_index]
-        content_number = content_numbers[page_index]
+    xobjects = ""
+    if image:
+        width, height, raw = image
+        packed = zlib.compress(raw, 9)
+        objects[image_object - 1] = (
+            f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+            f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(packed)} >>\nstream\n".encode() + packed + b"\nendstream")
+        xobjects = f" /XObject << /Im1 {image_object} 0 R >>"
 
-        objects[number - 1] = (
+    for index, page in enumerate(pages):
+        objects[page_numbers[index] - 1] = (
             f"<< /Type /Page /Parent {pages_obj} 0 R "
             f"/MediaBox [0 0 {PAGE_W} {PAGE_H}] "
-            f"/Resources << /Font << /F1 {type0} 0 R >> >> "
-            f"/Contents {content_number} 0 R >>").encode()
-
-        stream = zlib.compress(_content_stream(page, font).encode("latin-1"), 9)
-        objects[content_number - 1] = (
+            f"/Resources << /Font << /F1 {type0} 0 R >>{xobjects} >> "
+            f"/Contents {content_numbers[index]} 0 R >>").encode()
+        stream = zlib.compress("\n".join(page).encode("latin-1"), 9)
+        objects[content_numbers[index] - 1] = (
             f"<< /Length {len(stream)} /Filter /FlateDecode >>\nstream\n".encode()
             + stream + b"\nendstream")
 
-    cmap_bytes = _to_unicode_cmap(glyph_to_char)
-    stream = zlib.compress(cmap_bytes, 9)
+    cmap = zlib.compress(_to_unicode_cmap(canvas.chars), 9)
     objects[cmap_object - 1] = (
-        f"<< /Length {len(stream)} /Filter /FlateDecode >>\nstream\n".encode()
-        + stream + b"\nendstream")
+        f"<< /Length {len(cmap)} /Filter /FlateDecode >>\nstream\n".encode()
+        + cmap + b"\nendstream")
 
     return _assemble(objects)
+
+
+_LATEX_HINT = re.compile(r"[\\^_{}]")
+_LEADING = 1.45
+_PAGE_BOTTOM = MARGIN + 40
+_USABLE = PAGE_W - 2 * MARGIN
+
+
+def _formula_latex(value: str) -> str:
+    return re.sub(r"\$+|\\\(|\\\)|\\\[|\\\]", "", value or "").strip()
+
+
+def _plain(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace("$", r"\$")).strip()
+
+
+def _mathtext_ok(latex: str) -> bool:
+    from matplotlib import mathtext
+    from matplotlib.font_manager import FontProperties
+
+    try:
+        mathtext.MathTextParser("path").parse(f"${latex}$", dpi=72, prop=FontProperties(size=12))
+    except Exception:  # the parser raises several exception types for bad input
+        return False
+    return True
+
+
+class _Sheet:
+    """Top-down page layout on matplotlib figures; text widths are measured, not estimated."""
+
+    def __init__(self) -> None:
+        self.figs: list = []
+        self._new_page()
+
+    def _new_page(self) -> None:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        fig = Figure(figsize=(PAGE_W / 72, PAGE_H / 72), dpi=72)
+        FigureCanvasAgg(fig)
+        self.figs.append(fig)
+        self.fig = fig
+        self.renderer = fig.canvas.get_renderer()
+        self.y = PAGE_H - MARGIN
+
+    def ensure(self, height: float) -> None:
+        if self.y - height < _PAGE_BOTTOM:
+            self._new_page()
+
+    def _text(self, x: float, baseline: float, value: str, size: float,
+              bold: bool = False, color: tuple = INK):
+        return self.fig.text(x / PAGE_W, baseline / PAGE_H, value, fontsize=size,
+                             fontweight="bold" if bold else "normal", color=color,
+                             transform=self.fig.transFigure, ha="left", va="baseline")
+
+    def _measure(self, value: str, size: float, bold: bool = False) -> tuple[float, float]:
+        artist = self._text(0, 0, value, size, bold)
+        box = artist.get_window_extent(self.renderer)
+        artist.remove()
+        return box.width, box.height
+
+    def _line_height(self, line: str, size: float, bold: bool = False) -> float:
+        if line.startswith("$"):
+            return self._measure(line, size, bold)[1] * 1.1
+        return size * _LEADING
+
+    def _wrap(self, value: str, size: float, bold: bool, width: float) -> list[str]:
+        lines, current = [], ""
+        for word in value.split():
+            candidate = f"{current} {word}".strip()
+            if current and self._measure(candidate, size, bold)[0] > width:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        return lines
+
+    def _lines(self, value: str, size: float, bold: bool, width: float, latex: bool) -> list[str]:
+        if latex:
+            formula = _formula_latex(value)
+            formula = re.sub(r"\\le(?![a-z])", r"\\leq", formula)
+            formula = re.sub(r"\\ge(?![a-z])", r"\\geq", formula)
+            formula = formula.replace("\\frac", "\\dfrac")
+            if formula and _mathtext_ok(formula):
+                markup = f"${formula}$"
+                if self._measure(markup, size, bold)[0] <= width:
+                    return [markup]
+            return self._wrap(_plain(_strip_latex(value)), size, bold, width)
+        return self._wrap(_plain(value), size, bold, width)
+
+    def _draw_line(self, x: float, top: float, line: str, size: float,
+                   bold: bool = False, color: tuple = INK) -> float:
+        if line.startswith("$"):
+            height = self._measure(line, size, bold)[1]
+            self._text(x, top - height * 0.8, line, size, bold, color)
+        else:
+            self._text(x, top - size, line, size, bold, color)
+        return self._line_height(line, size, bold)
+
+    def rect(self, x: float, y: float, w: float, h: float, *,
+             fill: tuple | None = None, stroke: tuple | None = None, line: float = 1.0) -> None:
+        from matplotlib.patches import Rectangle
+
+        self.fig.add_artist(Rectangle(
+            (x / PAGE_W, y / PAGE_H), w / PAGE_W, h / PAGE_H, transform=self.fig.transFigure,
+            facecolor=fill or "none", edgecolor=stroke or "none", linewidth=line))
+
+    def rule(self, y: float, color: tuple, width: float) -> None:
+        from matplotlib.lines import Line2D
+
+        self.fig.add_artist(Line2D(
+            [MARGIN / PAGE_W, (PAGE_W - MARGIN) / PAGE_W], [y / PAGE_H, y / PAGE_H],
+            transform=self.fig.transFigure, color=color, linewidth=width))
+
+    def paragraph(self, value: str, size: float, *, bold: bool = False,
+                  color: tuple = INK, latex: bool = False) -> None:
+        if not value:
+            return
+        lines = self._lines(value, size, bold, _USABLE, latex)
+        self.ensure(sum(self._line_height(line, size, bold) for line in lines))
+        for line in lines:
+            self.y -= self._draw_line(MARGIN, self.y, line, size, bold, color)
+
+    def formula(self, latex: str, size: float = 12) -> None:
+        lines = self._lines(latex, size, False, _USABLE - 24, latex=True)
+        if not lines:
+            return
+        panel = sum(self._line_height(line, size) for line in lines) + 12
+        self.ensure(panel + 8)
+        top = self.y - 6
+        self.rect(MARGIN, top - panel, _USABLE, panel, fill=PANEL)
+        self.rect(MARGIN, top - panel, 3, panel, fill=ACCENT)
+        cursor = top - 6
+        for line in lines:
+            cursor -= self._draw_line(MARGIN + 14, cursor, line, size)
+        self.y = top - panel - 8
+
+    def boxed(self, value: str, size: float = 14) -> None:
+        lines = self._lines(value, size, True, _USABLE - 24, latex=bool(_LATEX_HINT.search(value)))
+        box = sum(self._line_height(line, size, True) for line in lines) + 14
+        self.ensure(box + 4)
+        top = self.y
+        self.rect(MARGIN, top - box, _USABLE, box, stroke=ACCENT, line=1.2)
+        cursor = top - 7
+        for line in lines:
+            cursor -= self._draw_line(MARGIN + 12, cursor, line, size, bold=True)
+        self.y = top - box
+
+    def footers(self) -> None:
+        total = len(self.figs)
+        for index, fig in enumerate(self.figs):
+            self.fig = fig
+            self.rule(FOOTER_Y + 12, PANEL, 0.6)
+            self._text(MARGIN, FOOTER_Y, BRAND, 8, color=MUTED)
+            number = f"{index + 1} / {total}"
+            self._text(PAGE_W - MARGIN - self._measure(number, 8)[0], FOOTER_Y, number, 8, color=MUTED)
+
+
+def to_pdf(payload: dict) -> bytes:
+    """A solution as a worked answer: title, numbered steps, typeset formulas, boxed answer."""
+    import io
+
+    import matplotlib as mpl
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    lang = str(payload.get("language", "en"))[:2]
+    title = _strip_latex(payload.get("title") or "Solution")
+    answer = str(payload.get("answer") or "").strip()
+    buffer = io.BytesIO()
+
+    with mpl.rc_context({"font.family": "DejaVu Sans", "mathtext.fontset": "dejavusans",
+                         "pdf.fonttype": 42}):
+        sheet = _Sheet()
+        sheet.paragraph(title, 18, bold=True)
+        sheet.y -= 6
+        sheet.rule(sheet.y, ACCENT, 1.4)
+        sheet.y -= 14
+        for step in payload.get("steps") or []:
+            number = step.get("n")
+            name = STEP_TITLES.get(lang, "Step")
+            sheet.ensure(30)
+            sheet.y -= 6
+            sheet.paragraph(f"{name} {number}" if number else name, 9.5, bold=True, color=ACCENT)
+            sheet.paragraph(_strip_latex(step.get("text") or ""), 11)
+            sheet.formula(step.get("latex") or "")
+        if answer:
+            sheet.ensure(60)
+            sheet.y -= 12
+            sheet.paragraph(ANSWER_TITLES.get(lang, "Answer"), 12, bold=True, color=ACCENT)
+            sheet.y -= 4
+            sheet.boxed(answer)
+        sheet.footers()
+
+        with PdfPages(buffer) as pdf:
+            pdf.infodict()["Title"] = title
+            pdf.infodict()["Creator"] = BRAND
+            for fig in sheet.figs:
+                pdf.savefig(fig)
+    return buffer.getvalue()
+
+
+def to_graph_pdf(payload: dict) -> bytes:
+    """One A4 page: the plotted graph as an image, with its caption above."""
+    from .pdf_font import FontError, load_font
+
+    width = int(payload.get("width") or 0)
+    height = int(payload.get("height") or 0)
+    raw = base64.b64decode(payload.get("rgb") or "")
+    if not (16 <= width <= 4000 and 16 <= height <= 4000) or len(raw) != width * height * 3:
+        raise ValueError("ExprError.bad_payload")
+
+    caption = _strip_latex(payload.get("title") or "")
+    try:
+        font = load_font(caption + BRAND + "0123456789")
+    except FontError:
+        font = None
+
+    if font is None:
+        return _pdf_ascii([(BRAND, 12.0, True)])
+
+    canvas = _Canvas(font)
+    canvas.y = PAGE_H - MARGIN
+    if caption:
+        canvas.paragraph(caption, 14, bold=True)
+        canvas.y -= 10
+    scale = min((PAGE_W - 2 * MARGIN) / width, (PAGE_H - 2 * MARGIN - 60) / height)
+    draw_w, draw_h = width * scale, height * scale
+    canvas.ensure(draw_h + 10)
+    top = canvas.y
+    canvas.pages[-1].append(
+        f"q {draw_w:.1f} 0 0 {draw_h:.1f} {MARGIN} {top - draw_h:.1f} cm /Im1 Do Q")
+    canvas.y = top - draw_h
+    total = len(canvas.pages)
+    for index in range(total):
+        _footer(canvas, index, total)
+    return _document(canvas.pages, font, canvas, image=(width, height, raw))
 
 
 def _pdf_ascii(lines: list[tuple[str, float, bool]]) -> bytes:

@@ -21,7 +21,10 @@ waits for the warm-up instead of the launch.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import subprocess
+import sys
 import threading
 from pathlib import Path
 import time
@@ -103,9 +106,9 @@ class Api:
         "ping", "ready", "solve", "solve_equation", "solve_system", "steps",
         "matrix_op", "matrix_list", "matrix_save", "matrix_delete", "matrix_get",
         "calculus", "analyze", "limit", "plot", "autoscale",
-        "hardware", "model_catalogue", "cycle_form", "export_pdf", "export_latex",
+        "hardware", "model_catalogue", "cycle_form", "export_pdf", "export_latex", "export_graph_pdf", "open_exports_dir",
         "settings_get", "settings_set",
-        "ollama_status", "ollama_install", "ollama_start", "ollama_pull", "ollama_delete", "open_models_dir", "setup_all",
+        "ollama_status", "ollama_install", "ollama_start", "ollama_pull", "ollama_delete", "ollama_cancel", "open_models_dir", "setup_all",
         "ai_ask", "ai_stop", "ai_reset", "ai_new_chat", "ai_drop_chat",
         "pick_image", "open_data_dir",
         "reference", "ollama_stop", "shutdown",
@@ -230,6 +233,14 @@ class Api:
             if second is not None:
                 right = (module.from_text(second) if isinstance(second, str)
                          else module.to_matrix(second))
+
+            # The keypad sends short names ("det", "inv"); the tab's own
+            # buttons send long ones ("determinant", "inverse"). One name table
+            # keeps both working instead of a 500 for the second caller.
+            aliases = {"determinant": "det", "inverse": "inv",
+                       "transpose": "transpose", "eigenvalues": "eigen",
+                       "eigenvectors": "eigenvec"}
+            operation = aliases.get(operation, operation)
 
             if operation in ("det", "rank", "trace", "eigen", "eigenvec", "lu"):
                 result = module.run(operation, module.to_grid(left))
@@ -375,26 +386,14 @@ class Api:
             return {"ok": False, "error": str(exc), "steps": []}
 
     # ------------------------------------------------------------- export files
-    def _ask_save_path(self, default_name: str, file_types: tuple) -> str | None:
-        """Native save dialog. Falls back to the documents folder when no GUI."""
-        try:
-            import tkinter
-            from tkinter import filedialog
+    def _export_path(self, default_name: str) -> Path:
+        """A new file in the exports folder; the time stamp keeps earlier exports intact."""
+        from ..core.settings import data_dir
 
-            root = tkinter.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            path = filedialog.asksaveasfilename(
-                initialfile=default_name, filetypes=list(file_types),
-                defaultextension=Path(default_name).suffix)
-            root.destroy()
-            return path or None
-        except Exception:                  # headless or tkinter missing
-            from ..core.settings import data_dir
-
-            fallback = data_dir() / "exports" / default_name
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            return str(fallback)
+        folder = data_dir() / "exports"
+        folder.mkdir(parents=True, exist_ok=True)
+        stem, suffix = os.path.splitext(default_name)
+        return folder / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}{suffix}"
 
     def export_pdf(self, kind: str, payload: dict, filename: str = "") -> dict:
         """Render the current solution as a PDF the student can submit."""
@@ -404,13 +403,10 @@ class Api:
             if not name.lower().endswith(".pdf"):
                 name += ".pdf"
 
-            target = self._ask_save_path(name, (("PDF", "*.pdf"),))
-            if not target:
-                return {"ok": False, "cancelled": True}
-
+            target = self._export_path(name)
             data = exporter.to_pdf(payload if isinstance(payload, dict) else {})
-            exporter.write(Path(target), data)
-            return {"ok": True, "path": target, "bytes": len(data)}
+            exporter.write(target, data)
+            return {"ok": True, "path": str(target), "bytes": len(data)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -422,13 +418,42 @@ class Api:
             if not name.lower().endswith(".tex"):
                 name += ".tex"
 
-            target = self._ask_save_path(name, (("LaTeX", "*.tex"),))
-            if not target:
-                return {"ok": False, "cancelled": True}
-
+            target = self._export_path(name)
             text = exporter.to_latex(payload if isinstance(payload, dict) else {})
-            exporter.write(Path(target), text)
-            return {"ok": True, "path": target, "bytes": len(text)}
+            exporter.write(target, text)
+            return {"ok": True, "path": str(target), "bytes": len(text)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def export_graph_pdf(self, payload: dict, filename: str = "") -> dict:
+        """Save the fullscreen graph, rendered on the page client-side, as a PDF."""
+        try:
+            exporter = _mod("exporter")
+            name = filename or "graph.pdf"
+            if not name.lower().endswith(".pdf"):
+                name += ".pdf"
+
+            target = self._export_path(name)
+            data = exporter.to_graph_pdf(payload if isinstance(payload, dict) else {})
+            exporter.write(target, data)
+            return {"ok": True, "path": str(target), "bytes": len(data)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def open_exports_dir(self) -> dict:
+        """Open the folder the fallback exports are saved to, so the user can find them."""
+        try:
+            from ..core.settings import data_dir
+
+            folder = data_dir() / "exports"
+            folder.mkdir(parents=True, exist_ok=True)
+            if sys.platform == "win32":
+                os.startfile(str(folder))                       # noqa: S606 - our own folder
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+            return {"ok": True, "path": str(folder)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -461,8 +486,13 @@ class Api:
         window closes makes the whole machine sluggish.
         """
         result: dict = {}
+        self._stop.set()
+        llm = _mod("llm")
+        llm.abort_all()
+        deadline = time.monotonic() + 15
+        while self._busy.is_set() and time.monotonic() < deadline:
+            time.sleep(0.1)
         try:
-            llm = _mod("llm")
             result["ollama"] = llm.stop_server()
         except Exception as exc:                  # noqa: BLE001 - exit path
             result["ollama"] = {"stopped": False, "error": str(exc)}
@@ -521,11 +551,18 @@ class Api:
 
         Models run from a few hundred megabytes to several gigabytes; without
         this the only way to reclaim the space was a terminal.
+
+        Runs as a background job like the downloads: deleting several gigabytes
+        takes seconds, must show the same busy state, and must not be clickable
+        twice. The HTTP API only exists while the server is up, so a stopped
+        service is started first.
         """
         if not model:
             return {"ok": False, "error": "ExprError.no_model"}
-        try:
-            llm = _mod("llm")
+
+        def task(llm):
+            if not llm.is_running():
+                llm.start_server(on_progress=lambda p: self._emit("onService", p))
             result = llm.delete_model(model)
             if not result.get("ok"):
                 return result
@@ -541,7 +578,9 @@ class Api:
 
             result["model"] = model
             return result
-        except Exception as exc:
+        try:
+            return self._background("ollama_delete", task, "onDeleteDone")
+        except Exception as exc:                  # noqa: BLE001 - reported to the UI
             return {"ok": False, "error": str(exc)}
 
     def ollama_status(self) -> dict:
@@ -558,8 +597,10 @@ class Api:
 
     def ollama_start(self) -> dict:
         def task(llm):
+            if llm.is_running():
+                return {"ok": True, "already": True, "text": "settings.server_already"}
             llm.start_server(on_progress=lambda p: self._emit("onService", p))
-            return {"ok": True, "text": "ok"}
+            return {"ok": True, "text": "settings.server_started"}
         return self._background("ollama_start", task, "onServiceDone")
 
     def ollama_pull(self, model: str) -> dict:
@@ -567,10 +608,13 @@ class Api:
             return {"ok": False, "error": "ExprError.no_model"}
 
         def task(llm):
-            llm.pull(model, on_progress=lambda p: self._emit("onPull", p),
-                     should_stop=self._stop.is_set)
+            llm.pull(model, on_progress=lambda p: self._emit("onPull", p))
             return {"ok": True, "model": model}
         return self._background("ollama_pull", task, "onPullDone")
+
+    def ollama_cancel(self) -> dict:
+        _mod("llm").cancel_job()
+        return {"ok": True}
 
     def setup_all(self, model: str) -> dict:
         """Install service, start it and download the model in one action."""
@@ -579,7 +623,7 @@ class Api:
 
         def task(llm):
             if not llm.is_installed():
-                self._emit("onService", {"stage": "install", "text": "installing"})
+                self._emit("onService", {"stage": "install", "text": "setup.ollama_installing"})
                 installed = llm.install_windows(
                     on_progress=lambda p: self._emit("onService", p))
                 if not installed.get("ok"):
@@ -589,8 +633,7 @@ class Api:
 
             if not llm.has_model(model):
                 self._emit("onService", {"stage": "model", "text": model})
-                llm.pull(model, on_progress=lambda p: self._emit("onPull", p),
-                         should_stop=self._stop.is_set)
+                llm.pull(model, on_progress=lambda p: self._emit("onPull", p))
 
             return {"ok": True, "text": model}
         return self._background("setup_all", task, "onSetupDone")
@@ -602,10 +645,15 @@ class Api:
 
         self._busy.set()
         self._stop.clear()
+        llm = _mod("llm")
+        llm.begin_job()
 
         def runner() -> None:
+            from ..core.download import DownloadCancelled
             try:
-                result = task(_mod("llm"))
+                result = task(llm)
+            except DownloadCancelled:
+                result = {"ok": False, "cancelled": True, "text": "setup.cancelled"}
             except Exception as exc:
                 result = {"ok": False, "text": str(exc), "error": str(exc)}
             finally:
