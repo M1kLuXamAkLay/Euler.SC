@@ -26,6 +26,39 @@ PAGE_W, PAGE_H = 595, 842          # A4 in points
 MARGIN = 56
 
 
+def _use_headless_backend() -> None:
+    """Pin matplotlib to a non-interactive backend before any figure exists.
+
+    Export writes files and never shows a window, so Agg is always correct.
+
+    Two things have to happen in this order, and the order is the whole point:
+
+    1. **Repair the environment variable.** ``MPLBACKEND`` inherited from a
+       Jupyter session names ``module://matplotlib_inline.backend_inline``. That
+       module does not exist outside the notebook, so ``import matplotlib``
+       itself raises ``ValueError: Key backend`` — before any of our code gets a
+       chance to call ``use()``. The variable is removed first, so the import can
+       succeed at all.
+    2. **Force Agg.** ``force=True`` also replaces a backend another module
+       already selected.
+
+    A failure here is swallowed: if matplotlib is genuinely broken, the export
+    reports that later with a clearer message than an import traceback.
+    """
+    import os
+
+    selected = os.environ.get("MPLBACKEND", "")
+    if selected.startswith("module://"):
+        # A module backend is only valid inside the environment that provides it
+        os.environ.pop("MPLBACKEND", None)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg", force=True)
+    except Exception:      # pragma: no cover - a broken install fails later anyway
+        pass
+
+
 # --------------------------------------------------------------------- helpers
 def _read_group(text: str, start: int) -> tuple[str, int]:
     """Read a ``{...}`` group starting at ``start``; return content and end index.
@@ -475,6 +508,7 @@ def _plain(value: str) -> str:
 
 
 def _mathtext_ok(latex: str) -> bool:
+    _use_headless_backend()
     from matplotlib import mathtext
     from matplotlib.font_manager import FontProperties
 
@@ -622,6 +656,7 @@ def to_pdf(payload: dict) -> bytes:
     """A solution as a worked answer: title, numbered steps, typeset formulas, boxed answer."""
     import io
 
+    _use_headless_backend()
     import matplotlib as mpl
     from matplotlib.backends.backend_pdf import PdfPages
 

@@ -20,9 +20,8 @@ waits for the warm-up instead of the launch.
 """
 from __future__ import annotations
 
-import json
+import logging
 import os
-import queue
 import subprocess
 import sys
 import threading
@@ -33,10 +32,15 @@ from typing import Any
 _core: dict[str, Any] = {}
 _warm_lock = threading.Lock()
 _warm_done = threading.Event()
+# Why the warm-up failed, if it did. Without this the first request raised
+# ``KeyError: 'solver'`` -- a message that names an internal detail and hides
+# the real cause (a SyntaxError in an unrelated module, a missing dependency).
+_warm_error: BaseException | None = None
 
 
 def _warmup() -> None:
     """Import heavy dependencies before the first request arrives."""
+    global _warm_error
     try:
         from ..core import (
             analysis, calculus, exporter, format as fmt, grapher, hardware, llm,
@@ -69,16 +73,36 @@ def _warmup() -> None:
                 "intent": intent,
                 "ExprError": ExprError,
             })
+    except BaseException as exc:                  # noqa: BLE001 - reported below
+        _warm_error = exc
+        logging.getLogger("euler").exception("engine warm-up failed")
     finally:
         _warm_done.set()
 
 
+class EngineUnavailable(RuntimeError):
+    """The engine never finished loading; the message carries the real cause."""
+
+
 def _mod(name: str):
-    """Return a warmed module, blocking until the warm-up finishes."""
+    """Return a warmed module, blocking until the warm-up finishes.
+
+    :raises EngineUnavailable: the warm-up failed, so no module exists. The
+        original exception is chained, and its text is what the interface
+        shows -- ``KeyError: 'solver'`` told the user nothing.
+    """
     if not _warm_done.is_set():
         _warm_done.wait(timeout=30)
     with _warm_lock:
-        return _core[name]
+        try:
+            return _core[name]
+        except KeyError:
+            pass
+    cause = _warm_error
+    raise EngineUnavailable(
+        f"engine failed to load: {type(cause).__name__}: {cause}" if cause
+        else "engine failed to load: warm-up did not finish in 30 s"
+    ) from cause
 
 
 def _normalise(payload: dict) -> dict:
@@ -155,11 +179,32 @@ class Api:
             transport.emit(event, payload)
 
     def ping(self) -> dict:
-        """Liveness probe. Called first by the interface."""
-        return {"ok": True, "pong": True, "version": "2.2.0"}
+        """Liveness probe. Called first by the interface.
+
+        ``version`` is the package version, not a literal. It used to return a
+        hard-coded ``"2.2.0"`` from the release that introduced the probe, so the
+        interface had no way to tell one build from another - which is precisely
+        what a user needs when an update seems not to have applied.
+        """
+        from .. import __version__
+
+        return {"ok": True, "pong": True, "version": __version__}
 
     def ready(self) -> dict:
-        """Reports whether heavy modules finished loading."""
+        """Reports whether heavy modules finished loading.
+
+        A failed warm-up returns ``ok: False`` with the real cause, so the
+        interface reports what broke instead of showing every later request as
+        ``KeyError: 'solver'``.
+        """
+        if _warm_error is not None:
+            return {
+                "ok": False,
+                "warm": True,
+                "error": f"{type(_warm_error).__name__}: {_warm_error}",
+                "version": "2.2.0",
+                "methods": [],
+            }
         return {
             "ok": True,
             "warm": _warm_done.is_set(),
@@ -250,7 +295,7 @@ class Api:
                 if right is None:
                     return {"ok": False, "error": "ExprError.need_second_matrix"}
                 result = module.run(operation, module.to_grid(left), module.to_grid(right))
-            elif operation in ("scalar", "power"):
+            elif operation in ("scalar", "power", "root"):
                 result = module.run(operation, module.to_grid(left), None, extra)
             else:
                 return {"ok": False, "error": f"ExprError.unknown_operation:{operation}"}
@@ -386,14 +431,51 @@ class Api:
             return {"ok": False, "error": str(exc), "steps": []}
 
     # ------------------------------------------------------------- export files
+    # Characters that are legal in a Windows path but must not appear in a name
+    # the interface chose: the separators, the drive colon, and everything the
+    # Win32 layer reserves. A name like CON.pdf is refused by the OS at write
+    # time, which used to surface as an unexplained failure.
+    _WINDOWS_RESERVED = frozenset(
+        {"CON", "PRN", "AUX", "NUL"}
+        | {f"COM{i}" for i in range(1, 10)}
+        | {f"LPT{i}" for i in range(1, 10)}
+    )
+
     def _export_path(self, default_name: str) -> Path:
-        """A new file in the exports folder; the time stamp keeps earlier exports intact."""
+        """A new file in the exports folder; the time stamp keeps exports apart.
+
+        The name arrives from the interface, so it is untrusted: it used to be
+        interpolated straight into a path, and ``filename="../../../../tmp/x"``
+        wrote outside the exports folder (an absolute path did the same). Only
+        the final component is kept, and the resolved result is checked against
+        the folder before anything is written.
+        """
         from ..core.settings import data_dir
 
-        folder = data_dir() / "exports"
+        folder = (data_dir() / "exports").resolve()
         folder.mkdir(parents=True, exist_ok=True)
-        stem, suffix = os.path.splitext(default_name)
-        return folder / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}{suffix}"
+
+        cleaned = Path(str(default_name or "solution")).name
+        # Drop characters no target filesystem accepts, plus control characters
+        cleaned = "".join(
+            ch for ch in cleaned if ch.isprintable() and ch not in '<>:"|?*\\'
+        ).strip(" .")
+        if not cleaned or cleaned in (".", ".."):
+            cleaned = "solution"
+
+        stem, suffix = os.path.splitext(cleaned)
+        stem = stem.strip(" .") or "solution"
+        if stem.upper() in self._WINDOWS_RESERVED:
+            stem = f"_{stem}"
+        # Cap the stem: the sandbox and Windows both dislike very long names
+        stem = stem[:64]
+        if suffix.lower() not in (".pdf", ".tex", ".txt", ""):
+            suffix = suffix[:8]
+
+        target = (folder / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}{suffix}").resolve()
+        if not target.is_relative_to(folder):
+            raise ValueError("ExprError.bad_filename")
+        return target
 
     def export_pdf(self, kind: str, payload: dict, filename: str = "") -> dict:
         """Render the current solution as a PDF the student can submit."""

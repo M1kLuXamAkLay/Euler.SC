@@ -22,6 +22,14 @@ python -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 goto :failed
 
 echo.
+echo === 1b/3  Syncing the version stamp ===
+REM  One source of truth: euler\__init__.py. This writes build\version.nsh and
+REM  build\version_info.txt so the installer and the Windows resource cannot
+REM  disagree with the application about its own version.
+python build\sync_version.py
+if errorlevel 1 goto :failed
+
+echo.
 echo === 2/3  Freezing the application ===
 REM  --noconfirm replaces dist\EulerSC without prompting
 pyinstaller build\euler.spec --noconfirm --clean

@@ -6,7 +6,7 @@
 
 **A symbolic calculator with a local AI tutor. No account, no cloud, no telemetry.**
 
-[![Version](https://img.shields.io/badge/version-5.1.17-c96b7a?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-5.2.3-c96b7a?style=flat-square)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-8f4c56?style=flat-square)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-4b8bbe?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-6fc79a?style=flat-square)](LICENSE.txt)
@@ -61,6 +61,17 @@ running locally on `127.0.0.1`.
 - Domain, range, asymptotes, extrema, monotonicity, inflection
 - Live graph with pan and zoom, plus a fullscreen view
 - Grid steps follow a 1/2/5 sequence at any zoom level
+- **Annotate the graph by hand.** The fullscreen view is a drawing surface: pen,
+  straight line, arrow, dashed line, rectangle, circle, text, and a point that
+  labels itself with its own coordinates. The select tool frames any stroke with
+  eight handles and a rotation knob, so a note can be moved, resized and turned
+  into place after it is drawn. Strokes live in graph coordinates, not screen
+  pixels — zoom in and the ink grows and stays on the curve it marks. The eraser
+  rubs along the drag and cuts freehand ink where it passes, leaving the rest;
+  `Ctrl+Z` undoes any edit, including an erase. Tools bind to the left or right
+  mouse button independently, as in a paint program: left-click a tool for the
+  left button, right-click for the right. Annotations are included in the
+  exported PDF.
 
 </td>
 </tr>
@@ -96,6 +107,12 @@ running locally on `127.0.0.1`.
 Download `EulerSC-Setup.exe` from [Releases](../../releases) and run it.
 
 - Installs per-user into `%LOCALAPPDATA%\Programs\EulerSC`
+- **Upgrading is the same download.** Run a newer `EulerSC-Setup.exe` over the
+  installed copy: it reads the version already on the machine and shows you
+  both numbers before touching a file. Settings, saved matrices and exports are
+  kept — they live in `%APPDATA%\EulerSC`, not in the install directory.
+  Running the same version repairs the program files; running an older one is
+  refused unless you pass `/FORCE`
 - **No administrator rights**, no UAC prompt
 - Creates Desktop and Start Menu shortcuts
 - Registers in *Apps & features* with a working uninstaller
@@ -105,8 +122,8 @@ Download `EulerSC-Setup.exe` from [Releases](../../releases) and run it.
 ### From source — any platform
 
 ```bash
-git clone https://github.com/euler-project/euler.git
-cd euler
+git clone https://github.com/M1kLuXamAkLay/Euler.SC.git
+cd Euler.SC
 python -m venv .venv
 
 # Windows
@@ -239,7 +256,7 @@ check.
 ## Testing
 
 ```bash
-pytest tests/ -q            # 40 unit tests
+pytest tests/ -q            # 168 unit tests
 python tests/sweep_full.py  # 199 end-to-end checks
 ```
 
@@ -247,27 +264,31 @@ The sweep covers parsing, solving, calculus, matrices, formatting, the theorem
 reference, ranking quality, the request guard and intent classification. It
 prints a single `199/199 passed` line, and is run before every release.
 
+**Why 168 and not 170.** The runner reports a total of `170 passed`, while the
+commands above say 168. The difference is `tests/test_doc_counts.py`, whose two
+tests check the numbers in this documentation against the real suite. It counts
+the suite with `--deselect tests/test_doc_counts.py`, so it cannot count itself:
+170 collected minus those 2 equals the 168 quoted here. Both numbers are correct
+and the check fails if either drifts.
+
 ## Project layout
 
 ```
 euler/
-  core/          mathematics, no UI and no network
-    parser       safe expression parsing, allow-list of names
-    solver       arithmetic, equations, systems
-    analysis     domain, range, asymptotes, extrema
-    calculus     limits, derivatives, integrals
-    matrix       named registry A–H
-    grapher      sampling with discontinuity splits
-    reference    145 theorems, ranking, prompt grounding
-    intent       lexical → model classifier → ask back
-    guard        declines harmful requests, masks profanity
-    llm          Ollama client: streaming, JSON mode, lifecycle
-  bridge/api     the only callable surface, allow-listed
-  transport      loopback HTTP with a per-launch token
+  core/          mathematics, no UI and no network: parser, solver, analysis,
+                 calculus, matrix, grapher, format, exporter, reference,
+                 intent, guard, llm, download, hardware, settings, registry
+  bridge/api     the only callable surface, allow-listed (see docs/API.md)
+  transport.py   loopback HTTP, per-launch token, Host check
+  main.py        window and lifecycle
 app/web/         index.html, app.js, i18n.js, theme.css
 build/           PyInstaller spec, NSIS installer, build scripts
+docs/            API reference (generated), headline image
 tests/           unit tests and the release sweep
+tools/           generators: API reference and project tree
 ```
+
+The full annotated tree is in [ARCHITECTURE.md](ARCHITECTURE.md#directory-structure).
 
 ## Contributing
 

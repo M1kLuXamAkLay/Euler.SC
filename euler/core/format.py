@@ -191,10 +191,9 @@ def _auto_key(value) -> str:
 def _carries_constant(value) -> bool:
     """True when the value contains pi or e as a factor."""
     try:
-        symbols = value.atoms(sp.Number)
+        return bool(value.has(sp.pi) or value.has(sp.E))
     except AttributeError:
         return False
-    return bool(value.has(sp.pi) or value.has(sp.E))
 
 
 

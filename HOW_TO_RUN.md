@@ -35,6 +35,32 @@ Run `EulerSC-Setup.exe`. It installs per-user into
 `%LOCALAPPDATA%\Programs\EulerSC`, creates Desktop and Start Menu shortcuts,
 and registers an uninstaller. No administrator rights are required.
 
+### Upgrading
+
+Run the installer of a newer release the same way you ran the first one; there
+is no separate updater and nothing to uninstall first.
+
+| What you run | What happens |
+|---|---|
+| newer build over an older one | upgrade — files replaced, your data untouched |
+| the same build again | repair — the program files are rewritten |
+| an older build over a newer one | refused, with both versions shown |
+| any of the above with `/FORCE` | proceeds even when it would downgrade |
+
+The installer records the version it installed in
+`HKCU\Software\EulerSC\Version` (next to `InstallDir`), and reads it back on
+the next run. That value, not the file dates and not a guess, decides what to
+do. The version that an upgrade replaced is kept in `PreviousVersion`, which is
+what you want on the phone with support.
+
+Settings, saved matrices and exported files live in `%APPDATA%\EulerSC` and are
+never part of the install directory, so an upgrade cannot overwrite them. Only
+the uninstaller removes that folder.
+
+If a copy of the application is running during the upgrade, the installer closes
+it — Windows will not replace a locked executable, and failing with a sharing
+violation is a worse answer than closing a window.
+
 Two installer flavours:
 
 | Build | Requires | Size |
@@ -93,7 +119,7 @@ The assistant reads three layers before answering, cheapest first:
 
 | Layer | Cost | What it does |
 |---|---|---|
-| Lexical | ~7 ms | Phrase and keyword match against 140 theorems |
+| Lexical | ~7 ms | Phrase and keyword match against 145 theorems |
 | Classifier | ~2 s | Model picks from a shortlist of real ids |
 | Fallback | — | Asks you to rephrase instead of guessing |
 
@@ -107,8 +133,13 @@ and the calculator is unaffected; only free-form descriptions stop resolving.
 ## Testing
 
 ```bash
-pytest tests/ -q             # 40 unit tests, about a second
+pytest tests/ -q             # 168 unit tests, about fifteen seconds
 python tests/sweep_full.py   # 199 end-to-end checks
 ```
 
 The sweep is the release gate. Run both before packaging.
+
+The runner prints a total of `170 passed`; the 168 above is the same suite
+without the two tests in `tests/test_doc_counts.py`, which check these numbers
+and exclude themselves so they can be stable. See
+[README](README.md#testing) for the full explanation.

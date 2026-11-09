@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from euler.bridge.api import Api
-from euler.core import registry
 
 API = Api()
 RESULTS: list[tuple[str, str, bool, str]] = []
@@ -195,10 +194,23 @@ for area, name, ok, detail in RESULTS:
     if not ok:
         print(f"  FAIL  {name:<{width}}  {detail}")
 
-print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
-if failed:
-    print("\nfailures by area:")
-    for area in dict.fromkeys(a for a, _, ok, _ in failed if not ok):
-        names = [n for a, n, ok, _ in failed if a == area and not ok]
-        print(f"  {area}: {len(names)} -> {', '.join(names[:6])}")
-    sys.exit(1)
+def test_all_scenarios() -> None:
+    """Run the whole sweep as one pytest case.
+
+    The module used to end in ``sys.exit(1)``, which killed the pytest process
+    during collection (INTERNALERROR) instead of reporting a failing test.
+    Collection stays at module level so ``python tests/test_scenarios.py`` still
+    prints the per-area report and exits non-zero.
+    """
+    assert not failed, "\n".join(
+        f"{area}: {name} -> {detail}" for area, name, _, detail in failed)
+
+
+if __name__ == "__main__":
+    print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
+    if failed:
+        print("\nfailures by area:")
+        for area in dict.fromkeys(a for a, _, ok, _ in failed if not ok):
+            names = [n for a, n, ok, _ in failed if a == area and not ok]
+            print(f"  {area}: {len(names)} -> {', '.join(names[:6])}")
+        sys.exit(1)

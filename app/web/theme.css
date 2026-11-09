@@ -184,6 +184,8 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 118px;
+  /* Content must never paint outside the screen frame */
+  overflow: hidden;
 }
 .lcd-status {
   display: flex; gap: 10px;
@@ -642,6 +644,17 @@ textarea { resize: vertical; min-height: 56px; font-family: var(--mono); }
   font-size: 12px;
 }
 .statusbar .grow { flex: 1; }
+
+/* Build identity in the footer. The application version is the one thing that
+   answers "did my update actually apply", and a frozen bundle carries its own
+   copy of this directory - so it has to be visible, not inferred. */
+.statusbar .app-version {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.75;
+  letter-spacing: 0.02em;
+}
 .statusbar .dot { width: 8px; height: 8px; background: #6fae8c; flex: 0 0 auto; }
 .statusbar .dot.busy { background: #e0a23a; animation: blink 1s steps(1) infinite; }
 .statusbar .dot.off { background: #c97a7a; }
@@ -1091,19 +1104,6 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   border-bottom: 2px solid var(--accent);
 }
 
-/* The function is typeset, not written as "y = x^3-3x" in ASCII.
-   Hidden overflow, not auto: a scrollable strip draws its own scrollbar,
-   which read as a stray control beside the close button. */
-.fs-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 18px;
-  color: var(--fg, #fbeeef);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .graph-fullscreen-dialog .graph-wrap,
 .graph-fullscreen-dialog > .canvas-host {
   position: relative;
@@ -1163,6 +1163,9 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   padding: 10px;
   flex: 1;
   min-height: 0;
+  /* On a short window the LCD and the keypad together exceed the card. Scroll
+     the card rather than letting the answer overlap the keys. */
+  overflow-y: auto;
 }
 
 .lcd-grow {
@@ -1189,9 +1192,22 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
   flex: 0 0 auto;
 }
 
-/* The keypad keeps its six rows and does not stretch */
+/* The keypad keeps its six rows at their natural height; the card scrolls
+   instead of compressing either the keys or the answer. On the matrix tab the
+   rows are a little shorter than elsewhere: the input line gave up its space
+   so that the whole keypad fits a 720 px window without scrolling. */
+/* Nine rows at a fixed pitch. The rows used to take whatever height the
+   column had left (1fr), so the keypad was 429 px whatever the window size, and
+   with the input line above it the card scrolled by a few pixels. A fixed row
+   height makes the keypad a known size: 9 x 34 px + 8 gaps = 366 px. */
 .mx-calc .keys {
   flex: 0 0 auto;
+  grid-auto-rows: 34px;
+  gap: 4px;
+}
+.mx-calc .keys .key {
+  min-height: 0;
+  height: 34px;
 }
 
 /* A large matrix (5x5 and up) must scroll instead of squeezing the cells */
@@ -1670,6 +1686,9 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
 }
 .analysis-top > .card { min-height: 0; margin: 0; }
 .analysis-input > .card-body { overflow-y: auto; }
+/* No top margin: the only space above the card is the pane's own gap, which is
+   the same 10 px that separates the two cards side by side. An extra margin
+   here made the horizontal divider visibly thicker than the vertical one. */
 .result-card { flex: 2 1 0; min-height: 110px; margin: 0; }
 .result-card > .card-body { overflow-y: auto; }
 .fn-legend {
@@ -1738,9 +1757,9 @@ input[type="range"]:focus { outline: 2px solid var(--accent); outline-offset: 2p
 
 /* ---- matrix calculator: the editor fills the LCD block, not a small box ---- */
 #view-matrix .lcd-input {
-  flex: 1 1 auto;
-  min-height: 96px;
-  font-size: 32px;
+  flex: 0 1 auto;
+  min-height: 40px;
+  font-size: 26px;
   line-height: 1.25;
   border: 0 !important;
   outline: none !important;
@@ -1760,7 +1779,29 @@ math-field.lcd-input::part(content) {
   background: transparent !important;
   padding: 0;
 }
-#view-matrix .lcd-grow .lcd-out { flex: 0 0 auto; min-height: 96px; }
+/* Height budget of the matrix LCD.
+   A fixed basis let a 5x5 result push past the bottom of the screen and onto
+   the keypad. Squeezing it with a bare `flex: 1` then collapsed the answer to a
+   clipped line on a 720 px window. The rule now: the answer keeps a readable
+   minimum and scrolls inside itself, the LCD clips anything that would escape
+   the frame, and the card scrolls when the two together exceed the window. */
+/* The LCD grows with its content instead of being stretched to a fixed share of
+   the column: the answer then has its natural height and the card, not the
+   screen, is what scrolls on a short window. */
+/* The card is taller than the keypad needs on a big window, and the slack used
+   to sit below the last row of keys as dead white space. Letting the LCD take
+   it puts the extra room where it is useful: a long answer. */
+#view-matrix .lcd-grow {
+  flex: 1 1 auto;
+  min-height: 88px;
+}
+
+#view-matrix .lcd-grow .lcd-out {
+  flex: 1 1 auto;
+  min-height: 72px;
+  max-height: 40vh;
+  overflow: auto;
+}
 
 /* ---- first-run: note and buttons share one row ---- */
 .onb-footer {
@@ -1836,4 +1877,175 @@ math-field.lcd-input::part(content) {
   color: var(--err);
   border: 2px solid var(--err);
   padding: 8px 12px;
+}
+
+/* ==========================================================================
+   Fullscreen graph: drawing layer and tools.
+   The stage holds two canvases: the plot underneath, the drawing on top. The
+   drawing layer takes pointer events only while a tool is active, so panning
+   and zooming keep working when nothing is being drawn.
+   ========================================================================== */
+.graph-fullscreen-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.graph-fullscreen-stage > canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* The overlay only takes pointer events while a *drawing* tool is active.
+   With the hand tool it stays transparent to events, so the plot canvas below
+   keeps its own pan and wheel-zoom bindings — one implementation, not two. */
+#draw-canvas {
+  pointer-events: none;
+  cursor: crosshair;
+}
+#draw-canvas.is-drawing {
+  pointer-events: auto;
+}
+#draw-canvas.is-erasing {
+  cursor: cell;
+}
+#draw-canvas.is-text {
+  cursor: text;
+}
+
+/* Inline text entry, placed where the user clicked. Positioned in stage
+   coordinates so it lines up with the stroke that will replace it. */
+.draw-text-input {
+  position: absolute;
+  z-index: 3;
+  min-width: 120px;
+  padding: 2px 4px;
+  font-family: var(--font);
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  color: var(--ink);
+  outline: none;
+}
+
+.graph-fullscreen-header {
+  flex-wrap: wrap;
+}
+.draw-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+/* Icons are inline SVG: they inherit currentColor, so the pressed state needs
+   no second asset, and nothing is fetched (CSP stays at `default-src 'self'`). */
+.draw-tool,
+/* The three thickness buttons draw their own dot instead of printing a glyph.
+   The old markup used U+2022 / U+25CF / U+2B24, and the smallest of them is a
+   display-font bullet whose counter showed as a notch at 16 px — the "cut"
+   inside the dot. A CSS circle has no font, no counter and no hinting. */
+.draw-width {
+  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+.draw-width-dot {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* Diameter follows the width the button selects, so the button is a sample of
+   what it does: 2 px of stroke reads as a small dot, 10 px as a large one. */
+.draw-width[data-width="2"] .draw-width-dot  { width: 5px;  height: 5px; }
+.draw-width[data-width="5"] .draw-width-dot  { width: 9px;  height: 9px; }
+.draw-width[data-width="10"] .draw-width-dot { width: 14px; height: 14px; }
+.draw-tool svg,
+#btn-draw-dash svg,
+#btn-draw-undo svg,
+#btn-draw-clear svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.draw-tool[aria-pressed="true"],
+.draw-width[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The dashed toggle carries its own name, because a row of nine icons gives no
+   hint what a row of three dashes does. aria-pressed was already set in
+   setToolButtons(), but nothing drew it: the button looked identical in both
+   states. Filled = dashes on, outline = off, matching the tool buttons. */
+.draw-dash {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.draw-dash-label {
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.draw-dash[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--body-deep);
+}
+
+/* Off: the icon sits back, so "off" is a state rather than a default. */
+.draw-dash[aria-pressed="false"] svg {
+  opacity: 0.55;
+}
+
+/* Which mouse button a tool answers to. A tool can hold both slots, and the
+   pressed background alone cannot show that, so the slot is printed in the
+   corner: L, R, or LR. */
+.draw-tool {
+  position: relative;
+}
+.draw-tool[data-slot]:not([data-slot=""])::after {
+  content: attr(data-slot);
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-size: 9px;
+  line-height: 1;
+  font-family: var(--mono);
+  opacity: 0.85;
+  pointer-events: none;
+}
+.draw-color {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--body-light);
+  background: var(--c);
+  cursor: pointer;
+  padding: 0;
+}
+.draw-color[aria-pressed="true"] {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -4px;
+}
+.draw-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--body-light);
+  opacity: 0.6;
 }

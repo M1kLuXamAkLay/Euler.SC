@@ -473,15 +473,17 @@ def asymptotes(expression, var) -> list[dict]:
         pass
 
     # Horizontal: a finite limit at infinity, not an oscillation
-    for target, label in ((sp.oo, "+\\infty"), (-sp.oo, "-\\infty")):
+    for target, _label in ((sp.oo, "+\\infty"), (-sp.oo, "-\\infty")):
         try:
             value = sp.limit(expression, var, target)
         except (ValueError, TypeError, NotImplementedError):
             continue
         if _failed(value) or value in (sp.oo, -sp.oo, sp.nan):
             continue
+        # Python < 3.12 forbids backslashes inside f-string expressions
+        direction = "+\u221e" if target is sp.oo else "\u2212\u221e"
         found.append(_line(
-            f"y = {num(value)} (horizontal, {var.name}\u2192{'+\u221e' if target is sp.oo else '\u2212\u221e'})",
+            f"y = {num(value)} (horizontal, {var.name}\u2192{direction})",
             f"y = {_tex(value)}\\;\\text{{(}}analysis.horizontal\\text{{)}}"))
 
     return found or [_msg("analysis.no_asymptotes")]
@@ -493,7 +495,7 @@ def limits_at_infinity(expression, var) -> list[dict]:
         try:
             value = sp.limit(expression, var, target)
         except (ValueError, TypeError, NotImplementedError):
-            lines.append(_msg(f"ExprError.undefined"))
+            lines.append(_msg("ExprError.undefined"))
             continue
 
         if _failed(value):
@@ -519,8 +521,10 @@ def limits_at(expression, var, point) -> list[dict]:
             continue
         if _failed(value):
             continue
+        # Python < 3.12 forbids backslashes inside f-string expressions
+        side = "\u2212" if direction == "-" else "+"
         lines.append(_line(
-            f"lim({var.name}\u2192{num(point)}{'\u2212' if direction == '-' else '+'}) = {num(value)}",
+            f"lim({var.name}\u2192{num(point)}{side}) = {num(value)}",
             f"\\lim_{{{var.name} \\to {_tex(point)}^{{{sign}}}}} {ln_latex(expression)} = {_tex(value)}"))
 
     try:

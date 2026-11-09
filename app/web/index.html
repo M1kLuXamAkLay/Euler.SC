@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="ru">
+<!-- data-booting is removed by app.js once the keypad is built; CSS keeps the
+     window in a flat body colour until then, so no half-drawn frame is shown. -->
+<html lang="ru" data-booting>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -161,7 +163,8 @@
 
         <div class="card graph-card">
           <div class="card-head">
-            <span class="card-title" data-i18n="analysis.graph">График</span>
+            <!-- No caption: the plot below is self-evident, and the row is
+                 better spent on the control hint. -->
             <span class="card-note" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
           </div>
           <div class="graph-wrap">
@@ -414,6 +417,7 @@
     <span id="status-text" data-i18n="common.loading">загрузка ядра…</span>
     <span class="grow"></span>
     <span id="status-hint" data-i18n="common.hint">Ctrl+Enter — вычислить</span>
+    <span id="app-version" class="app-version" title=""></span>
   </footer>
 </div>
 
@@ -444,10 +448,37 @@
 <div class="overlay" id="graph-fullscreen" hidden>
   <div class="graph-fullscreen-dialog">
     <div class="graph-fullscreen-header">
-      <div class="fs-title" id="graph-title-fs"></div>
+      <div class="draw-tools" id="draw-tools" role="toolbar" data-i18n-title="draw.toolbar" title="Drawing tools">
+        <button class="btn small draw-tool" data-tool="select" aria-pressed="false" data-i18n-title="draw.tool.select" title="Select / move / scale / rotate (V)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4l13 7-6 2-2 6z"/></svg></button>
+        <button class="btn small draw-tool" data-tool="hand" aria-pressed="true" data-i18n-title="draw.tool.hand" title="Hand (H)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-1.5a1.5 1.5 0 013 0V12m0-1a1.5 1.5 0 013 0v5a6 6 0 01-6 6h-1a6 6 0 01-6-6v-3a1.5 1.5 0 013 0"/></svg></button>
+        <button class="btn small draw-tool" data-tool="pen" aria-pressed="false" data-i18n-title="draw.tool.pen" title="Pen (P)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20l1-4 10-10 3 3-10 10-4 1z"/><path d="M14 6l3 3"/></svg></button>
+        <button class="btn small draw-tool" data-tool="line" aria-pressed="false" data-i18n-title="draw.tool.line" title="Line (L)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="1.6"/><circle cx="20" cy="4" r="1.6"/></svg></button>
+        <button class="btn small draw-tool" data-tool="arrow" aria-pressed="false" data-i18n-title="draw.tool.arrow" title="Arrow (A)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20L19 5"/><path d="M11 5h8v8"/></svg></button>
+        <button class="btn small draw-tool" data-tool="text" aria-pressed="false" data-i18n-title="draw.tool.text" title="Text (T)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 6h14M12 6v13M9 19h6"/></svg></button>
+        <button class="btn small draw-tool" data-tool="marker" aria-pressed="false" data-i18n-title="draw.tool.marker" title="Point with coordinates (M)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="2.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></button>
+        <button class="btn small draw-tool" data-tool="rect" aria-pressed="false" data-i18n-title="draw.tool.rect" title="Rectangle (R)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+        <button class="btn small draw-tool" data-tool="circle" aria-pressed="false" data-i18n-title="draw.tool.circle" title="Circle (O)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7.5"/></svg></button>
+        <button class="btn small draw-tool" data-tool="eraser" aria-pressed="false" data-i18n-title="draw.tool.eraser" title="Eraser (E)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 20h11"/><path d="M15 4l5 5-8 8H7l-3-3 11-11z"/></svg></button>
+        <span class="draw-sep" aria-hidden="true"></span>
+        <button class="draw-color" data-color="#2e1c20" style="--c:#2e1c20" aria-label="Ink" aria-pressed="true"></button>
+        <button class="draw-color" data-color="#2f5fb3" style="--c:#2f5fb3" aria-label="Blue" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#2f7d5a" style="--c:#2f7d5a" aria-label="Green" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#c4501f" style="--c:#c4501f" aria-label="Orange" aria-pressed="false"></button>
+        <span class="draw-sep" aria-hidden="true"></span>
+        <button class="btn small draw-width" data-width="2" aria-pressed="true" data-i18n-title="draw.width.thin" title="Thin"><span class="draw-width-dot" aria-hidden="true"></span></button>
+        <button class="btn small draw-width" data-width="5" aria-pressed="false" data-i18n-title="draw.width.medium" title="Medium"><span class="draw-width-dot" aria-hidden="true"></span></button>
+        <button class="btn small draw-width" data-width="10" aria-pressed="false" data-i18n-title="draw.width.thick" title="Thick"><span class="draw-width-dot" aria-hidden="true"></span></button>
+        <button class="btn small draw-dash" id="btn-draw-dash" aria-pressed="false" data-i18n-title="draw.tool.dash" title="Dashed line (D)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12h4M10 12h4M17 12h4"/></svg><span class="draw-dash-label" data-i18n="draw.dash.label">Пунктир</span></button>
+        <span class="draw-sep" aria-hidden="true"></span>
+        <button class="btn small" id="btn-draw-undo" data-i18n-title="draw.undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9h9a5 5 0 010 10H8"/><path d="M8 5L4 9l4 4"/></svg></button>
+        <button class="btn small" id="btn-draw-clear" data-i18n-title="draw.clear" title="Clear drawing"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>
+      </div>
       <button class="btn small" id="btn-close-graph" aria-label="Close">&#10005;</button>
     </div>
-    <canvas id="graph-canvas-fs"></canvas>
+    <div class="graph-fullscreen-stage">
+      <canvas id="graph-canvas-fs"></canvas>
+      <canvas id="draw-canvas" aria-label="Drawing layer"></canvas>
+    </div>
     <div class="fn-legend fs-legend" id="graph-legend-fs"></div>
     <div class="graph-controls">
       <button class="btn small" id="btn-fs-reset" data-i18n="graph.reset">Сбросить</button>
@@ -469,6 +500,7 @@
 <script src="vendor/mathlive.min.js"></script>
 <script src="vendor/marked.min.js"></script>
 <script src="i18n.js"></script>
+<script src="drawgeom.js"></script>
 <script src="app.js"></script>
 
 

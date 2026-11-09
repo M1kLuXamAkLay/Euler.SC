@@ -21,6 +21,10 @@ echo "==> Installing build dependencies"
 python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install -r requirements.txt pyinstaller
 
+echo "==> Syncing the version stamp"
+# One source of truth: euler/__init__.py -> build/version.nsh, version_info.txt
+python3 build/sync_version.py
+
 echo "==> Freezing the application"
 pyinstaller build/euler.spec --noconfirm --clean
 

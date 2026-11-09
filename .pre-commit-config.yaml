@@ -1,0 +1,19 @@
+# Runs the same checks as CI, locally, before each commit.
+#   pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+        # formatting is opt-in per file; see CONTRIBUTING.md
+
+  - repo: local
+    hooks:
+      - id: api-doc-current
+        name: docs/API.md is current
+        entry: python tools/gen_api_doc.py
+        language: system
+        pass_filenames: false
+        files: ^euler/bridge/api\.py$

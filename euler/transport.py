@@ -31,6 +31,7 @@ import json
 import logging
 import mimetypes
 import queue
+import re
 import secrets
 import threading
 from http import HTTPStatus
@@ -41,6 +42,50 @@ from urllib.parse import parse_qs, urlparse
 MAX_BODY = 8 * 1024 * 1024          # 8 MiB: an image plus prompt fits easily
 
 _log = logging.getLogger("euler.http")
+
+# Attributes the document needs *before* the first paint. The theme used to be
+# applied by app.js after `settings_get` returned, so a user who pinned light
+# saw the OS dark scheme for a second and then a repaint. Reading the stored
+# choice here and writing it into <html> makes the first frame correct, and
+# nothing flickers because nothing changes afterwards.
+_BOOT_ATTRIBUTES = re.compile(rb"<html\b([^>]*)>", re.IGNORECASE)
+
+
+def boot_document(document: bytes) -> bytes:
+    """Write the stored theme and language into the <html> tag.
+
+    Everything else in the tag is preserved, including ``data-booting``, which
+    the interface removes once its keypad exists. When settings are unreadable
+    the document is returned untouched: a corrupt configuration must never stop
+    the interface from loading.
+    """
+    try:
+        from .core.settings import load as load_settings
+
+        stored = load_settings()
+        theme = str(stored.get("theme") or "auto")
+        language = str(stored.get("language") or "")
+    except Exception:                            # noqa: BLE001 - never fatal
+        _log.debug("boot preferences unavailable", exc_info=True)
+        return document
+
+    if theme not in ("light", "dark"):
+        theme = "auto"
+
+    def rewrite(match: "re.Match") -> bytes:
+        attributes = match.group(1).decode("utf-8", "replace")
+        if language:
+            attributes = re.sub(r'\slang="[^"]*"', "", attributes)
+            attributes += f' lang="{language}"'
+        # Replace any hard-coded scheme with the stored one. "auto" means "no
+        # attribute", which is what lets the CSS media query follow the OS.
+        attributes = re.sub(r'\sdata-theme="[^"]*"', "", attributes)
+        if theme != "auto":
+            attributes += f' data-theme="{theme}"'
+        return f"<html{attributes}>".encode("utf-8")
+
+    replaced, count = _BOOT_ATTRIBUTES.subn(rewrite, document)
+    return replaced if count else document
 
 
 class Transport:
@@ -153,6 +198,22 @@ class Transport:
                 self._send(status, json.dumps(payload, ensure_ascii=False, default=str).encode(),
                            "application/json; charset=utf-8")
 
+            def _host_allowed(self) -> bool:
+                """Reject a request addressed to some other host name.
+
+                This is the DNS-rebinding guard: a page on attacker.example can
+                resolve its own name to 127.0.0.1, but the browser then sends
+                ``Host: attacker.example``, which this refuses. Without it a
+                token-less GET still needed the token, but the check costs
+                nothing and makes the promise in the module docstring true.
+                """
+                host = (self.headers.get("Host") or "").strip().lower()
+                if not host:
+                    return True                       # HTTP/1.0 client, no rebinding risk
+                port = transport._port
+                return host in (f"127.0.0.1:{port}", f"localhost:{port}",
+                                f"[::1]:{port}")
+
             def _same_origin(self) -> bool:
                 """Reject requests that did not originate from the served page."""
                 origin = self.headers.get("Origin")
@@ -166,6 +227,8 @@ class Transport:
                 parsed = urlparse(self.path)
                 query = parse_qs(parsed.query)
 
+                if not self._host_allowed():
+                    return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
                 if not self._authorised(query):
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "bad token"})
 
@@ -202,8 +265,11 @@ class Transport:
                 rel = path.lstrip("/") or "index.html"
                 target = (transport._web_dir / rel).resolve()
 
-                # Directory traversal guard: the resolved path must stay inside web/
-                if not str(target).startswith(str(transport._web_dir)):
+                # Path containment. A plain str.startswith() check accepted a
+                # sibling directory such as app/web_secret, because that string
+                # also begins with app/web; is_relative_to() compares whole path
+                # components.
+                if not target.is_relative_to(transport._web_dir):
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "outside root"})
                 if target.is_dir():
                     target = target / "index.html"
@@ -218,6 +284,11 @@ class Transport:
                     body = target.read_bytes()
                 except OSError:
                     return self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "read failed"})
+
+                # The document carries the stored theme and language from the
+                # first byte, so it paints once, in the right scheme.
+                if target.name == "index.html":
+                    body = boot_document(body)
 
                 # The document response plants the session cookie; every later
                 # sub-resource request rides on it instead of the query string.
@@ -242,6 +313,8 @@ class Transport:
                 parsed = urlparse(self.path)
                 query = parse_qs(parsed.query)
 
+                if not self._host_allowed():
+                    return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
                 if not self._authorised(query):
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "bad token"})
                 if not self._same_origin():
@@ -249,7 +322,16 @@ class Transport:
                 if not parsed.path.startswith("/api/"):
                     return self._json(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
 
-                length = int(self.headers.get("Content-Length") or 0)
+                # A malformed header must be a 400, not an unhandled ValueError
+                # escaping the request thread and polluting the log.
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    return self._json(HTTPStatus.BAD_REQUEST,
+                                      {"ok": False, "error": "bad content-length"})
+                if length < 0:
+                    return self._json(HTTPStatus.BAD_REQUEST,
+                                      {"ok": False, "error": "bad content-length"})
                 if length > MAX_BODY:
                     return self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                                       {"ok": False, "error": "request too large"})

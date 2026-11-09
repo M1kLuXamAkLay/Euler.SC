@@ -16,9 +16,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -33,6 +33,12 @@ jobs:
           pytest tests/ -q
           python tests/sweep_full.py
 
+      - name: Sync the version stamp
+        # The installer takes its version from build/version.nsh, which this
+        # script derives from euler/__init__.py. Without it the installer would
+        # carry whatever number was committed last.
+        run: python build/sync_version.py
+
       - name: Install NSIS
         run: choco install nsis --no-progress -y
 
@@ -45,7 +51,7 @@ jobs:
           & "C:\Program Files (x86)\NSIS\makensis.exe" build\installer.nsi
 
       - name: Upload artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: EulerSC-Setup
           path: dist/EulerSC-Setup.exe

@@ -1,0 +1,25 @@
+# Tool configuration only. Euler.SC is run from source (`python run.py`) and
+# packaged with PyInstaller, so there is no [project] table and no build backend.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["build", "docs", "app", "assets"]
+
+[tool.ruff.lint]
+# Errors that are always bugs: syntax, undefined names, unused imports, the
+# bugbear set. These gate CI.
+select = ["E9", "F", "B"]
+# Style findings are not enforced yet; they are listed in CONTRIBUTING.md as
+# the next cleanup rather than hidden.
+ignore = [
+  "B905",   # zip(strict=): length mismatch behaviour is intentional in places
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert on broad exceptions and build throwaway fixtures
+"tests/*" = ["B017", "F841"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

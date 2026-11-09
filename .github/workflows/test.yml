@@ -14,12 +14,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # 3.10 is the floor the app supports, 3.12 the modern target. Both must
+        # be green: 5.1.17 shipped an f-string that only 3.12 accepts, and only
+        # the 3.10 jobs caught it.
         python: ["3.10", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -36,6 +39,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      # Fails fast, and on every OS, if the tree uses syntax newer than the
+      # declared floor. test_syntax_floor.py does the same thing inside pytest.
+      # Lint gate: only errors that are always bugs. Style is tracked in
+      # CONTRIBUTING.md and does not fail the build.
+      - name: Lint (ruff)
+        if: matrix.python == '3.12'
+        run: |
+          pip install ruff==0.17.4
+          ruff check .
+
+      - name: Syntax floor (3.10)
+        run: python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('euler', quiet=1, force=True) else 1)"
 
       - name: Unit tests
         run: pytest tests/ -q

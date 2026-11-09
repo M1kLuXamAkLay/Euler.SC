@@ -8,8 +8,16 @@ env/
 .pytest_cache/
 .mypy_cache/
 
-# PyInstaller
+# PyInstaller: generated work directory. build/euler.spec and the build
+# scripts stay tracked; everything PyInstaller writes next to them does not.
+build/euler/
 build/pyinstaller/
+build/*.toc
+build/*.pkg
+build/*.pyz
+build/*.zip
+build/*.html
+build/warn-*.txt
 dist/
 *.spec.bak
 
@@ -36,3 +44,6 @@ _*.jpg
 logs/
 exports/
 settings.json
+.env
+.env.local
+.ruff_cache/

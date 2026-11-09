@@ -19,6 +19,324 @@ Nothing yet.
 
 ---
 
+## [5.2.3] — 2026-11-08
+
+Version bump so an installed copy can be told apart from the previous build.
+Two interface defects were fixed in 5.2.2 but never reached a single installed
+machine, because the frozen bundle carries its own copy of `app/web`: editing
+the source changed nothing in a running `EulerSC.exe`. That is not a bug in the
+stylesheet — it is the reason 5.2.3 exists as a separate number.
+
+### Added
+
+- **The version is shown in the interface**, so "did my update land" has an
+  answer without opening the install directory.
+
+### Fixed
+
+- **The dashed-line toggle and the thickness buttons.** Already described under
+  [5.2.2](#522--2026-11-08) — repeated here because 5.2.2 was never installed
+  anywhere; the fixes first reach a user in this build.
+
+---
+
+## [5.2.2] — 2026-11-08
+
+The installer becomes self-aware about what is already on the machine.
+
+### Added
+
+- **Annotation tools on the fullscreen plot.** Ten tools, each with an SVG icon
+  and a keyboard shortcut, assigned to the left or right mouse button
+  independently: hand (`H`), select (`V`), pen (`P`), line (`L`), arrow (`A`),
+  text (`T`), point-with-coordinates (`M`), rectangle (`R`), circle (`O`),
+  eraser (`E`). Holding `D` toggles dashed strokes for the pen, line, arrow,
+  rectangles and circles.
+- **Select, move, scale and rotate.** The select tool frames a stroke with eight
+  scale handles and a rotation knob above the frame. Dragging inside the frame
+  moves, a handle scales about the opposite handle, the knob rotates about the
+  stroke's centre. `Delete` removes the selection, `Escape` drops it, and every
+  edit goes on the undo stack.
+- **Points carry their coordinates.** The marker tool places a dot and labels it
+  `(x, y)` from the world coordinates, with a precision that follows the zoom.
+- **Annotations live in world coordinates.** A stroke keeps its original points
+  and an affine transform; moving, scaling and rotating compose into that matrix
+  instead of rewriting the geometry, so a stroke can always be restored exactly.
+  Geometry is in `app/web/drawgeom.js`, free of the DOM and tested directly under
+  Node.
+- **Running the installer again upgrades instead of reinstalling blind.** The
+  previous run now records its version in `HKCU\Software\EulerSC`, and the
+  next run reads it back, checks the executable is really on disk, and compares
+  versions before touching anything: older → upgrade, equal → repair, newer →
+  refused unless `/FORCE` is passed. Both numbers are shown in a confirmation
+  before the first file is written.
+- **Settings survive an upgrade by construction, not by care.** They live in
+  `%APPDATA%\EulerSC`, outside the install directory, and the upgrade path
+  contains no command that removes them. Verified end to end in Wine: a 5.2.0
+  installation upgraded to 5.2.2 with `settings.json` and `matrices.json`
+  unchanged, and `PreviousVersion` set to `5.2.0`.
+- **`build/sync_version.py`** derives `build/version.nsh` and
+  `build/version_info.txt` from `euler/__init__.py`. Called by `build.bat`,
+  `build.sh` and the release workflow.
+- **`tests/test_installer_meta.py`** — nine checks that the two version stamps
+  agree with the package, that the installer does not hard-code a version, that
+  it reads the previous one, and that the upgrade path removes no user data.
+
+### Changed
+
+- **The dashed-line toggle names itself and shows its state.** It was three
+  grey dashes among nine icons, with no caption and no visible difference
+  between on and off: `setToolButtons()` had always set `aria-pressed`, but no
+  CSS rule drew it, so the button looked identical either way. It now reads
+  "Пунктир" (translated in all seven languages), fills with the accent colour
+  when active, and its icon dims to 55% when idle.
+- **The thickness buttons draw a dot instead of printing a glyph.** They used
+  U+2022, U+25CF and U+2B24; the smallest is a display-font bullet whose
+  counter showed as a notch at 16 px — the "cut" inside the dot. Each button
+  now contains a CSS circle sized to the width it selects (5, 9 and 14 px), so
+  it has no font, no counter and no hinting to distort it.
+- **The divider under the graph is the same weight as the one beside it.** The
+  result card carried a 20 px top margin (9 px, then 11 px more, both requested
+  by hand) on top of the pane's own 10 px gap, so the horizontal band read as a
+  thicker separator than the vertical one. The margin is gone: both are the
+  pane gap, 10 px, at every window size.
+- **The documented test count is now explained, not just asserted.** `pytest`
+  reports 170 passed while four documents say 168; the two extra tests are in
+  `tests/test_doc_counts.py`, which counts the suite with itself deselected. A
+  reader comparing the output with the document previously had no way to tell a
+  deliberate convention from a stale number.
+
+### Fixed
+
+- **`tools/gen_tree.py` reported cache files as undescribed sources.** When git
+  refuses the repository (a container where the checkout is owned by another
+  user, or a missing `safe.directory` entry) the script fell back to walking the
+  filesystem, and that walk picked up `.ruff_cache` and `dist/`. The fallback now
+  applies the same ignore rules git would.
+- **The version was written by hand in four places and had already drifted.**
+  `version_info.txt` still declared `5,1,0,0` while the package declared 5.2.1,
+  so Explorer and *Apps & features* disagreed with the application about what
+  was installed. One source now generates the rest.
+- **A running copy could fail the install.** Windows refuses to replace a locked
+  executable; the upgrade path now closes the application first and says so.
+- **Version comparison is numeric, not textual.** `5.10.0` sorts above `5.9.0`;
+  a truncated or hand-edited registry value becomes `0` instead of aborting.
+
+---
+
+## [5.2.1] — 2026-11-08
+
+Interface and plotting fixes found in use; all seven are reproducible from the
+report that prompted them.
+
+### Fixed
+
+- **ALT showed the wrong calculator's answer.** The calculator and the matrix
+  calculator shared three globals (`answerLatex`, `answerForm`, `lastExpression`),
+  so pressing ALT in one cycled the value the *other* had computed last: a
+  determinant appeared under a fraction, and finishing in the matrix tab broke
+  ALT in the calculator. Each surface now owns its own record
+  (`state.answers.calc` / `state.answers.matrix`) and paints into its own output.
+  AC clears only the surface it belongs to, and cancels a reply still in flight.
+
+### Changed
+
+- **The result card sits 9 px lower.** It keeps the proportional share it had
+  (`flex: 2 1 0`, `min-height: 110px`); only a 9 px top margin was added, so the
+  plot above it ends a little higher without the card changing size.
+- **No dead space under the matrix keypad.** The keypad has a fixed height, so on
+  a tall window everything below it was empty. The LCD grows into that room
+  instead, which is where a long answer needs it.
+
+### Added
+
+- **Annotations are pinned to the plot, not to the window.** Strokes were stored
+  in screen pixels, which made the drawing a sheet of glass in front of the
+  camera: zooming left the ink the same size, and it slid over the curve instead
+  of belonging to it. Every point is now a world coordinate, so ink scales and
+  pans with the graph exactly as the curve does, and widths are stored with the
+  zoom they were drawn at so a stroke keeps its proportions.
+- **The eraser cuts instead of deleting.** It removed a whole stroke on contact
+  and fired on a single point, which is why it felt like it lurched and often
+  missed. It now rubs along the drag with a fixed on-screen radius and cuts
+  freehand ink where it passes, leaving the rest; shapes and labels are removed
+  whole, because half a circle is not a useful object. Erases go on the undo
+  stack, so a cut is reversible.
+- **Labels scale and stay inside the plot.** Text used a fixed 13 px font that
+  hung outside the canvas into the white margin. It is drawn in world space at
+  18 px and up, scaled by zoom, clipped to the plot rectangle, and the entry box
+  is clamped so it cannot open outside the canvas either.
+- **Adaptive sampling in the plot engine.** A uniform grid either drew a steep
+  section as a polygon or spent thousands of points on a straight line. The
+  engine now samples uniformly, then refines only the intervals whose midpoint
+  deviates from the chord, up to its budget: `x^3-3x` stays at 900 points while
+  `sin(1/x)` near zero gets 2063 where it needs them.
+- **Text and hand tools on the fullscreen plot.** Text places a label where you
+  click: type, press Enter, and it becomes a stroke like any other (Escape
+  abandons it). Hand is the default tool and leaves the pointer to the plot
+  itself, so dragging pans and the wheel zooms without a second, drifting
+  implementation of either. Shortcuts: `H`, `P`, `L`, `T`, `R`, `O`, `E`.
+- **Left and right mouse buttons hold separate tools.** Left-click a tool to
+  put it in the left slot, right-click to put it in the right slot, as in a
+  paint program: pen on the left and eraser on the right is the intended
+  default. A small `L` / `R` / `LR` badge on each button shows which slot it
+  answers to, since the pressed background alone cannot say that. The right
+  button is a drawing button over the layer, so the browser menu never opens
+  there; the hand tool pans with either button.
+- **Icons on the drawing toolbar.** Every tool button was a text glyph from an
+  arbitrary font; each is now an inline SVG that inherits `currentColor`, so the
+  pressed state needs no second asset and nothing is fetched.
+
+### Fixed
+
+- **Escape stopped closing the fullscreen plot after one cancelled exit.** The
+  handler removed itself before learning whether the user confirmed, so
+  declining the "drawing will be lost" prompt left the overlay open with the
+  shortcut dead for the rest of the session. The handler now stays attached
+  until the close actually happens, and a stale listener from a previous open
+  is removed first.
+- **The graph broke off at the ends in fullscreen.** The sample window was
+  measured against the inline card while the overlay has a different shape, so
+  the ends of the visible range were never sampled; the engine was also asked
+  for points uniformly instead of for a base grid plus refinement. The window is
+  now measured against the canvas that is actually on screen, and the overlay
+  resamples when it opens.
+- **Choosing a drawing tool silently disabled wheel zoom.** The layer covers
+  the plot and, with a tool active, receives the wheel itself; it did nothing
+  with it. Wheel events are now forwarded to the plot canvas, so one zoom
+  implementation serves both tools.
+- **Exported PDFs dropped the drawing.** The plot and the annotations live on
+  two canvases and only the first was sent, so every label and arrow the user
+  had just drawn was missing from the file. The two are composited before
+  export.
+- **The drawing layer could not remove text.** The eraser tested every stroke as
+  a path, and a label has no path — it had a single point and was unerasable.
+  Text now has a bounding-box hit test, measured with the real font.
+- **A label was committed twice.** Removing the focused input fires `blur`,
+  which ran the commit a second time; one flag now makes the first commit final.
+
+---
+
+## [5.2.0] — 2026-11-08
+
+Release-blocking fixes: the CI matrix went red, and three interface defects
+were visible on every launch.
+
+### Fixed
+
+- **Python 3.10 could not import the engine at all.** `analysis.py` had a
+  backslash inside an f-string expression, which only Python 3.12 accepts
+  (PEP 701). On 3.10 the module failed to parse, the background warm-up died,
+  and every request came back as `err='solver'` — the two 3.10 jobs on all three
+  platforms failed on this alone. The expression is now computed before the
+  f-string. `tests/test_syntax_floor.py` parses every source file with
+  `feature_version=(3, 10)`, so a 3.12-only construct fails locally instead of
+  in CI.
+- **The Windows release sweep never ran.** `tests/sweep_full.py` called
+  `signal.signal(signal.SIGALRM, ...)` at import time; Windows has no `SIGALRM`
+  and the module raised `AttributeError` before its first check. The timeout now
+  lives in `tests/_guard.py`: a real alarm on POSIX, a daemon thread with a
+  deadline elsewhere.
+- **`KeyError: 'solver'` replaced the real failure.** `_mod()` looked the module
+  up in a dictionary that a failed warm-up leaves empty, so a `SyntaxError` in
+  any module surfaced as a missing key with no traceback. `_warmup()` now records
+  the exception, `_mod()` raises `EngineUnavailable` chained to it, and `ready()`
+  returns `ok: false` with the cause, which is what the interface displays.
+- **A matrix answer drew over the keypad.** In the matrix tab `.lcd-out` had a
+  fixed flex basis inside a clipped screen block, so a 5x5 result pushed past the
+  bottom edge and painted on top of the keys at 960x720 — the fullscreen view was
+  unaffected because it sizes to content. The LCD now grows with its content, the
+  answer scrolls inside itself past 40vh, and `.lcd` clips anything that would
+  escape the frame.
+- **The first frame used the system theme.** The stored scheme was applied by
+  `app.js` after `settings_get` returned, so a user who pinned light saw the OS
+  dark scheme for about a second and then a repaint. The transport now writes
+  `data-theme` and `lang` into `<html>` while serving `index.html`, so the first
+  painted frame is already correct. Unreadable settings leave the document
+  untouched.
+- **A half-built interface was briefly visible.** The keypad is generated from
+  JavaScript, so the window showed an empty screen above an empty key grid. The
+  served document carries `data-booting`, CSS hides `.app` while it is set, and
+  `init()` removes it once the keypad, matrix grid and equation row exist; a
+  3-second timer uncovers the window if a later step throws.
+- **Export could write outside the exports folder.** `export_*` joined the
+  caller's `filename` straight into a path, so `../../x` and absolute paths
+  wrote anywhere the user could write. Only the final component is kept now,
+  reserved Windows names are rejected, and the resolved target must lie inside
+  `exports/` (`is_relative_to`). Verified: nothing escapes to `/tmp` or `~/tmp`.
+- **Static file guard matched by string prefix.** `str.startswith` accepted a
+  sibling directory such as `app/web_secret`. Replaced with `is_relative_to()`.
+- **A malformed `Content-Length` crashed the request thread.** It now returns
+  `400` instead of an unhandled `ValueError` in the log.
+- **The `Host` header was never checked.** The transport docstring promised a
+  DNS-rebinding guard that did not exist. Requests must now address
+  `127.0.0.1`, `localhost` or `[::1]` on the serving port; anything else gets
+  `403 bad host`.
+
+### Changed
+
+- **`tests/test_scenarios.py` no longer ends in `sys.exit(1)`.** pytest imported
+  the module, hit the exit, and reported `INTERNALERROR` instead of a failing
+  test. The sweep now runs as one pytest case; running the file directly still
+  prints the per-area report and exits non-zero.
+- Test count is 125 (was 76) and the sweep stays at 199 checks.
+- Architecture document brought in line with the code: security layers,
+  persistence keys, the boot sequence, and the Known Limitations that are
+  still true. Previously it described a 4.x codebase in places.
+
+---
+
+### Security
+
+- **Model output could run script.** The markdown renderer passed raw HTML from
+  the model straight to the page. `<img onerror>` executed in the application's
+  origin, and `javascript:` links were live. Output is now sanitised against an
+  allowlist of tags and attributes before formulas are re-inserted; 15 attack
+  vectors were checked in a browser, all inert, and ordinary markdown survives.
+- The release lint gate (`ruff`, bugbear and pyflakes errors) runs in CI.
+
+### Fixed
+
+- **`rad()` and `deg()` were the same function.** Both multiplied by π/180, so
+  `rad(pi/2)` became `sin(pi^2/360)`. `rad(v)` now converts radians to degrees.
+- **`0^0` is flagged.** The engine still returns 1, the SymPy convention, but the
+  result carries a note that it is indeterminate inside a limit.
+- **`build/euler/` was committed** — about 45 MB of PyInstaller work files,
+  including `PYZ-00.pyz` and `EulerSC.pkg`. Removed from the index and ignored.
+  The spec and build scripts stay tracked. Git history was not rewritten.
+- **The README clone URL pointed at a repository that does not exist.** It now
+  names `M1kLuXamAkLay/Euler.SC`, and the 13 compare links in this file were
+  corrected to the same repository.
+- Dead code removed from `format._carries_constant` and `stepwise`; one loop
+  variable renamed where it was truly unused.
+- **PDF export no longer depends on `MPLBACKEND`.** A Jupyter session exports
+  `module://matplotlib_inline.backend_inline`, which does not exist outside the
+  notebook, and `import matplotlib` then raised `ValueError: Key backend` before
+  any of our code could select a backend. The module removes that value and
+  forces Agg. Three tests failed on this in a notebook environment only.
+
+### Added
+
+- `SECURITY.md`: supported versions, private reporting, response targets, scope.
+- `.env.example`: every environment variable the code reads, with defaults.
+- `docs/API.md`, generated by `tools/gen_api_doc.py` from `Api._exported`.
+  `tests/test_api_doc.py` fails if the committed file is stale or a method is
+  undocumented.
+- `pyproject.toml` with ruff configuration; `.pre-commit-config.yaml`.
+- `tools/gen_tree.py`, which generates the project tree and refuses to run while
+  a tracked file has no description.
+- `tests/test_doc_counts.py`: documented test and sweep counts must match the
+  real ones. They had drifted from 40 to 76 to 125 while the suite grew.
+
+### Changed
+
+- Version 5.2.0 in `euler/__init__.py`, the Windows version resource and the
+  installer.
+- `ARCHITECTURE.md`: directory tree regenerated; the Security and Testing
+  sections describe what the code does.
+
+---
+
 ## [5.1.17] — 2026-11-06
 
 A pass over the settings screen; the same four fixes as 5.1.16, plus a layout
@@ -1232,6 +1550,10 @@ system WebView.
 
 | Version | Date | Headline |
 |---|---|---|
+| 5.2.3 | 2026-11-08 | Version visible in the UI; interface fixes reach an installed copy |
+| 5.2.2 | 2026-11-08 | Installer upgrades in place, one source for the version |
+| 5.2.1 | 2026-11-08 | ALT per surface, drawing in world coordinates, adaptive sampling |
+| 5.2.0 | 2026-11-08 | Python 3.10 import, CI matrix, XSS in model output |
 | 5.0.3 | 2026-11-04 | AI panel: model name in the header, input panel at the bottom |
 | 5.0.2 | 2026-11-04 | Stable axis labels while dragging, fullscreen uses the whole screen |
 | 5.0.1 | 2026-11-04 | Model deletion fixed, service button renamed, models folder button |
@@ -1305,17 +1627,21 @@ computational core, not a script with a window on top.
 
 ---
 
-[Unreleased]: https://github.com/euler-project/euler/compare/v4.8.0...HEAD
-[4.8.0]: https://github.com/euler-project/euler/compare/v4.7.0...v4.8.0
-[4.7.0]: https://github.com/euler-project/euler/compare/v4.6.0...v4.7.0
-[4.6.0]: https://github.com/euler-project/euler/compare/v4.5.0...v4.6.0
-[4.5.0]: https://github.com/euler-project/euler/compare/v4.4.0...v4.5.0
-[4.4.0]: https://github.com/euler-project/euler/compare/v4.3.0...v4.4.0
-[4.3.0]: https://github.com/euler-project/euler/compare/v4.2.0...v4.3.0
-[4.2.0]: https://github.com/euler-project/euler/compare/v4.1.0...v4.2.0
-[4.1.0]: https://github.com/euler-project/euler/compare/v4.0.0...v4.1.0
-[4.0.0]: https://github.com/euler-project/euler/compare/v3.9.0...v4.0.0
-[3.9.0]: https://github.com/euler-project/euler/compare/v3.0.0...v3.9.0
-[3.0.0]: https://github.com/euler-project/euler/compare/v2.2.0...v3.0.0
-[2.2.0]: https://github.com/euler-project/euler/compare/v2.0.0...v2.2.0
-[2.0.0]: https://github.com/euler-project/euler/releases/tag/v2.0.0
+[Unreleased]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.3...HEAD
+[5.2.3]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.2...v5.2.3
+[5.2.2]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.1...v5.2.2
+[5.2.1]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.0...v5.2.1
+[5.2.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.1.17...v5.2.0
+[4.8.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.7.0...v4.8.0
+[4.7.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.6.0...v4.7.0
+[4.6.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.5.0...v4.6.0
+[4.5.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.4.0...v4.5.0
+[4.4.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.3.0...v4.4.0
+[4.3.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.2.0...v4.3.0
+[4.2.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.1.0...v4.2.0
+[4.1.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v4.0.0...v4.1.0
+[4.0.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v3.9.0...v4.0.0
+[3.9.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v3.0.0...v3.9.0
+[3.0.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v2.2.0...v3.0.0
+[2.2.0]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v2.0.0...v2.2.0
+[2.0.0]: https://github.com/M1kLuXamAkLay/Euler.SC/releases/tag/v2.0.0

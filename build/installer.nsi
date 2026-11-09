@@ -1,4 +1,4 @@
-﻿; ============================================================================
+; ============================================================================
 ; Euler.SC installer
 ;
 ;   makensis /DBUNDLED installer.nsi    ships a private Python runtime
@@ -9,8 +9,21 @@
 ;
 ; Lifecycle
 ;   install    language page -> components -> files -> shortcuts -> registry
+;   upgrade    the same script, run over an existing installation: the version
+;              recorded by the previous run is read back and compared, and the
+;              user is told what is about to happen before anything is touched
 ;   uninstall  uninstaller removes files, shortcuts, registry, app data and,
 ;              when the user agrees, Ollama together with its models
+;
+; Upgrade behaviour
+;   newer build over an older one        upgrade, settings and matrices kept
+;   same version over the same version   repair (rewrites the files)
+;   older build over a newer one         refused, with the two versions shown
+;   /FORCE                               downgrades anyway, for a rollback
+;
+; Settings, saved matrices and exports live in %APPDATA%\EulerSC and are never
+; part of the install directory, so an upgrade does not touch them. The
+; uninstaller removes them only when it runs, which an upgrade never does.
 ; ============================================================================
 
 Unicode true
@@ -18,11 +31,16 @@ Unicode true
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
+; The version is NOT written here. build/sync_version.py derives it from
+; euler/__init__.py and writes build/version.nsh, so the package, the Windows
+; resource and this script can never disagree about what is being installed.
+!include "version.nsh"
+
 !define APP_NAME      "Euler.SC"
 !define APP_EXE       "EulerSC.exe"
 !define APP_PUBLISHER "Euler Project"
-!define APP_VERSION   "5.1.17"
 !define APP_URL       "https://github.com/euler-project/euler"
+!define REG_APP       "Software\EulerSC"
 !define REG_UNINST    "Software\Microsoft\Windows\CurrentVersion\Uninstall\EulerSC"
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 !define OLLAMA_GUID   "{44E83376-CE68-45EB-8FC1-393500EB9D12}"
@@ -52,6 +70,10 @@ ShowUninstDetails show
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE.txt"
 !insertmacro MUI_PAGE_COMPONENTS
+
+; An upgrade goes back where it came from; the page would only invite the user
+; to break the shortcuts and registry entries that already point at that path.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryOnUpgrade
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 
@@ -117,11 +139,194 @@ LangString SecAsseDesc   ${LANG_FRENCH}      "Ouvrir les fichiers .tex avec l'ap
 LangString SecAsseDesc   ${LANG_PORTUGUESEBR} "Abrir arquivos .tex com o aplicativo ao clicar duas vezes."
 
 ; ---------------------------------------------------------------------------
-; Remembering the chosen language so the uninstaller speaks it too
+; Version handling
+;
+; NSIS has no version type, so a dotted string is compared part by part. The
+; numbers the build ships with come from version.nsh as separate definitions,
+; which removes the parsing step for our own side and the classic bug where
+; "5.10" sorts below "5.9".
+;
+; The installed side is read from the registry as one string and split here.
+; Every part is coerced to a number with IntOp, so a hand-edited or truncated
+; value ("5.2", "5.2.beta", "") becomes 0 instead of aborting the install.
 ; ---------------------------------------------------------------------------
 
+; ParseVersion: $R0 = "5.2.1"  ->  $R1 = 5, $R2 = 2, $R3 = 1
+Function ParseVersion
+  StrCpy $R4 ""      ; digits of the current part
+  StrCpy $R5 0       ; which part we are in
+  StrCpy $R6 0       ; character index
+  StrCpy $R1 0
+  StrCpy $R2 0
+  StrCpy $R3 0
+
+  ${Do}
+    StrCpy $R7 $R0 1 $R6
+    ${If} $R7 == ""
+      ; End of string: flush the part in hand.
+      ${If} $R5 == 0
+        StrCpy $R1 $R4
+      ${ElseIf} $R5 == 1
+        StrCpy $R2 $R4
+      ${ElseIf} $R5 == 2
+        StrCpy $R3 $R4
+      ${EndIf}
+      ${ExitDo}
+    ${EndIf}
+
+    ${If} $R7 == "."
+      ${If} $R5 == 0
+        StrCpy $R1 $R4
+      ${ElseIf} $R5 == 1
+        StrCpy $R2 $R4
+      ${ElseIf} $R5 == 2
+        StrCpy $R3 $R4
+      ${EndIf}
+      StrCpy $R4 ""
+      IntOp $R5 $R5 + 1
+      ${If} $R5 > 2
+        ${ExitDo}
+      ${EndIf}
+    ${Else}
+      StrCpy $R4 "$R4$R7"
+    ${EndIf}
+
+    IntOp $R6 $R6 + 1
+  ${Loop}
+
+  ; Non-numeric junk becomes 0 rather than a failed install.
+  IntOp $R1 $R1 + 0
+  IntOp $R2 $R2 + 0
+  IntOp $R3 $R3 + 0
+FunctionEnd
+
+; CompareInstalled: $R1/$R2/$R3 installed vs. the build's own numbers.
+;   $0 = 1  installed is newer (a downgrade)
+;   $0 = 0  same version      (a repair)
+;   $0 = -1 installed is older (an upgrade)
+Function CompareInstalled
+  StrCpy $0 -1
+  ${If} $R1 > ${APP_VERSION_MAJOR}
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} $R1 < ${APP_VERSION_MAJOR}
+    Return
+  ${EndIf}
+
+  ${If} $R2 > ${APP_VERSION_MINOR}
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} $R2 < ${APP_VERSION_MINOR}
+    Return
+  ${EndIf}
+
+  ${If} $R3 > ${APP_VERSION_PATCH}
+    StrCpy $0 1
+  ${ElseIf} $R3 == ${APP_VERSION_PATCH}
+    StrCpy $0 0
+  ${EndIf}
+FunctionEnd
+
+; ---------------------------------------------------------------------------
+; Upgrade detection, before any page is shown
+;
+; Everything is decided here so the pages can adapt: the directory page is
+; skipped for an existing installation, and the first dialog names both
+; versions before a single file is touched.
+; ---------------------------------------------------------------------------
+
+Var InstalledVersion      ; "" when nothing is installed
+Var InstallDirFound       ; where the previous run put it
+Var UpgradeState          ; "new" | "upgrade" | "repair" | "downgrade"
+
 Function .onInit
+  StrCpy $InstalledVersion ""
+  StrCpy $InstallDirFound ""
+  StrCpy $UpgradeState "new"
+
+  ; 1. The version recorded by the previous run. Older builds of this installer
+  ;    wrote only DisplayVersion, so that is the fallback rather than a second
+  ;    source of truth.
+  ClearErrors
+  ReadRegStr $0 HKCU "${REG_APP}" "Version"
+  ${If} $0 == ""
+    ReadRegStr $0 HKCU "${REG_UNINST}" "DisplayVersion"
+  ${EndIf}
+  StrCpy $InstalledVersion $0
+
+  ; 2. Where it is: the recorded directory, or the default when that default
+  ;    actually holds our executable.
+  ClearErrors
+  ReadRegStr $0 HKCU "${REG_APP}" "InstallDir"
+  ${If} $0 != ""
+    StrCpy $InstallDirFound $0
+  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Programs\EulerSC\${APP_EXE}"
+    StrCpy $InstallDirFound "$LOCALAPPDATA\Programs\EulerSC"
+  ${EndIf}
+
+  ; 3. A registry entry whose files are gone is the debris of a failed uninstall.
+  ;    Treating it as an installation would make the first real install look
+  ;    like an upgrade and inherit a broken directory.
+  ${If} $InstallDirFound != ""
+    ${IfNot} ${FileExists} "$InstallDirFound\${APP_EXE}"
+      StrCpy $InstallDirFound ""
+      StrCpy $InstalledVersion ""
+    ${EndIf}
+  ${EndIf}
+
+  ; 4. Classify.
+  ${If} $InstalledVersion != ""
+    StrCpy $R0 $InstalledVersion
+    Call ParseVersion
+    Call CompareInstalled
+    ${If} $0 == 1
+      StrCpy $UpgradeState "downgrade"
+    ${ElseIf} $0 == 0
+      StrCpy $UpgradeState "repair"
+    ${Else}
+      StrCpy $UpgradeState "upgrade"
+    ${EndIf}
+  ${EndIf}
+
+  ; 5. A downgrade is refused unless asked for explicitly. Rolling back after a
+  ;    bad release is legitimate, so /FORCE exists and says nothing extra.
+  ${If} $UpgradeState == "downgrade"
+    ${GetParameters} $R8
+    ClearErrors
+    ${GetOptions} $R8 "/FORCE" $R9
+    ${If} ${Errors}
+      MessageBox MB_ICONSTOP|MB_OK \
+        "$(MsgDowngradeBlocked)$\r$\n$\r$\n$(MsgInstalledIs)$InstalledVersion$\r$\n$(MsgThisIs)${APP_VERSION}"
+      Abort
+    ${EndIf}
+  ${EndIf}
+
+  ; 6. An upgrade keeps its location: shortcuts, the uninstall entry and the
+  ;    .tex association all point at it, so moving it would orphan them.
+  ${If} $InstallDirFound != ""
+    StrCpy $INSTDIR $InstallDirFound
+  ${EndIf}
+
+  ; 7. Say what is about to happen, with both numbers.
+  ${If} $UpgradeState == "upgrade"
+    MessageBox MB_OK|MB_ICONINFORMATION \
+      "$(MsgWillUpgrade)$\r$\n$\r$\n$(MsgFromVersion)$InstalledVersion$\r$\n$(MsgToVersion)${APP_VERSION}$\r$\n$\r$\n$(MsgSettingsKept)"
+  ${ElseIf} $UpgradeState == "repair"
+    MessageBox MB_OK|MB_ICONINFORMATION \
+      "$(MsgSameVersion)$\r$\n$\r$\n$(MsgRepair)"
+  ${EndIf}
+
   !insertmacro MUI_LANGDLL_DISPLAY
+FunctionEnd
+
+; The directory page is skipped for an existing installation (see the
+; MUI_PAGE_CUSTOMFUNCTION_PRE above the page list).
+Function SkipDirectoryOnUpgrade
+  ${If} $UpgradeState != "new"
+    Abort
+  ${EndIf}
 FunctionEnd
 
 ; ---------------------------------------------------------------------------
@@ -129,6 +334,28 @@ Section "$(SecAppName)" SecApp
   SectionIn RO
   SetShellVarContext current
   SetOutPath "$INSTDIR"
+
+  ; An upgrade overwrites the program, never the data.
+  ;
+  ; %APPDATA%\EulerSC (settings, saved matrices, exports) is outside $INSTDIR,
+  ; so it is untouched here by construction. What must be handled is the
+  ; program itself: a running copy holds EulerSC.exe open, and Windows refuses
+  ; to replace a locked file. Asking the user to close the window and retrying
+  ; is friendlier than a failed install with a sharing-violation message.
+  ${If} $UpgradeState != "new"
+    DetailPrint "$(MsgClosingOld)"
+    nsExec::Exec 'taskkill /IM "${APP_EXE}" /F /T'
+    Sleep 400
+
+    ; A stale file from the previous version can survive if it was renamed by an
+    ; update; removing the tree first means an upgrade never leaves two copies
+    ; of a module that no longer exists in the new package.
+    RMDir /r "$INSTDIR\_internal"
+    RMDir /r "$INSTDIR\web"
+    RMDir /r "$INSTDIR\app"
+    RMDir /r "$INSTDIR\euler"
+    Delete "$INSTDIR\${APP_EXE}"
+  ${EndIf}
 
   ; The PyInstaller directory bundle: executable, _internal tree and web assets
   File /r "..\dist\EulerSC\*.*"
@@ -156,14 +383,36 @@ Section "$(SecAppName)" SecApp
   ${EndSwitch}
   WriteRegStr HKCU "Software\EulerSC" "Language" $R0
 
-  WriteRegStr HKCU "Software\EulerSC" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\EulerSC" "Version" "${APP_VERSION}"
+  WriteRegStr HKCU "${REG_APP}" "InstallDir" "$INSTDIR"
+  ; The three keys the next run reads to decide upgrade / repair / downgrade.
+  ; Written last, after the files are in place: a version recorded for a failed
+  ; copy would make the next run believe an installation exists.
+  WriteRegStr HKCU "${REG_APP}" "Version" "${APP_VERSION}"
+  WriteRegDWORD HKCU "${REG_APP}" "VersionMajor" ${APP_VERSION_MAJOR}
+  WriteRegDWORD HKCU "${REG_APP}" "VersionMinor" ${APP_VERSION_MINOR}
+  WriteRegDWORD HKCU "${REG_APP}" "VersionPatch" ${APP_VERSION_PATCH}
+  ; Support asks "when did you install it"; the file timestamps are wiped by a
+  ; repair, so the date is recorded here. NSIS has no date variable, hence the
+  ; one shell call.
+  nsExec::ExecToStack 'cmd /c echo %DATE% %TIME%'
+  Pop $1          ; exit code
+  Pop $2          ; text, e.g. "08.11.2026 22:14:03,12"
+  ${If} $1 == 0
+    WriteRegStr HKCU "${REG_APP}" "InstalledOn" "$2"
+  ${EndIf}
+  ${If} $InstalledVersion != ""
+    ; Keep the version this installation replaced, so a downgrade or a support
+    ; question has an answer without guessing.
+    WriteRegStr HKCU "${REG_APP}" "PreviousVersion" "$InstalledVersion"
+  ${EndIf}
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegStr   HKCU "${REG_UNINST}" "DisplayName"     "${APP_NAME}"
   WriteRegStr   HKCU "${REG_UNINST}" "DisplayVersion"  "${APP_VERSION}"
+  WriteRegDWORD HKCU "${REG_UNINST}" "VersionMajor"    ${APP_VERSION_MAJOR}
+  WriteRegDWORD HKCU "${REG_UNINST}" "VersionMinor"    ${APP_VERSION_MINOR}
   WriteRegStr   HKCU "${REG_UNINST}" "Publisher"       "${APP_PUBLISHER}"
   WriteRegStr   HKCU "${REG_UNINST}" "URLInfoAbout"    "${APP_URL}"
   WriteRegStr   HKCU "${REG_UNINST}" "DisplayIcon"     "$INSTDIR\${APP_EXE}"
@@ -308,6 +557,80 @@ Section "Uninstall"
     skip_ollama:
   ${EndIf}
 SectionEnd
+
+; ---------------------------------------------------------------------------
+; Upgrade strings. Every page that can appear during an upgrade is translated:
+; an English-only dialog in a Russian or Chinese interface reads as a failure.
+; ---------------------------------------------------------------------------
+LangString MsgWillUpgrade      ${LANG_RUSSIAN} "Версия ${APP_NAME} будет обновлена."
+LangString MsgWillUpgrade      ${LANG_ENGLISH} "${APP_NAME} will be updated."
+LangString MsgWillUpgrade      ${LANG_SIMPCHINESE} "将更新 ${APP_NAME}。"
+LangString MsgWillUpgrade      ${LANG_SPANISH} "Se actualizará ${APP_NAME}."
+LangString MsgWillUpgrade      ${LANG_FRENCH} "${APP_NAME} va être mis à jour."
+LangString MsgWillUpgrade      ${LANG_PORTUGUESEBR} "${APP_NAME} será atualizado."
+
+LangString MsgFromVersion      ${LANG_RUSSIAN} "Установлена версия: "
+LangString MsgFromVersion      ${LANG_ENGLISH} "Installed version: "
+LangString MsgFromVersion      ${LANG_SIMPCHINESE} "已安装版本："
+LangString MsgFromVersion      ${LANG_SPANISH} "Versión instalada: "
+LangString MsgFromVersion      ${LANG_FRENCH} "Version installée : "
+LangString MsgFromVersion      ${LANG_PORTUGUESEBR} "Versão instalada: "
+
+LangString MsgToVersion        ${LANG_RUSSIAN} "Будет установлена: "
+LangString MsgToVersion        ${LANG_ENGLISH} "Will be installed: "
+LangString MsgToVersion        ${LANG_SIMPCHINESE} "将安装："
+LangString MsgToVersion        ${LANG_SPANISH} "Se instalará: "
+LangString MsgToVersion        ${LANG_FRENCH} "Sera installée : "
+LangString MsgToVersion        ${LANG_PORTUGUESEBR} "Será instalada: "
+
+LangString MsgSettingsKept     ${LANG_RUSSIAN} "Настройки, сохранённые матрицы и история сохранятся."
+LangString MsgSettingsKept     ${LANG_ENGLISH} "Settings, saved matrices and history are kept."
+LangString MsgSettingsKept     ${LANG_SIMPCHINESE} "设置、已保存的矩阵和将保留。"
+LangString MsgSettingsKept     ${LANG_SPANISH} "Se conservan los ajustes, las matrices guardadas y el historial."
+LangString MsgSettingsKept     ${LANG_FRENCH} "Les réglages, les matrices enregistrées et l'historique sont conservés."
+LangString MsgSettingsKept     ${LANG_PORTUGUESEBR} "Configurações, matrizes salvas e histórico são mantidos."
+
+LangString MsgSameVersion      ${LANG_RUSSIAN} "${APP_NAME} ${APP_VERSION} уже установлена."
+LangString MsgSameVersion      ${LANG_ENGLISH} "${APP_NAME} ${APP_VERSION} is already installed."
+LangString MsgSameVersion      ${LANG_SIMPCHINESE} "已安装 ${APP_NAME} ${APP_VERSION}。"
+LangString MsgSameVersion      ${LANG_SPANISH} "${APP_NAME} ${APP_VERSION} ya está instalado."
+LangString MsgSameVersion      ${LANG_FRENCH} "${APP_NAME} ${APP_VERSION} est déjà installé."
+LangString MsgSameVersion      ${LANG_PORTUGUESEBR} "${APP_NAME} ${APP_VERSION} já está instalado."
+
+LangString MsgRepair           ${LANG_RUSSIAN} "Файлы программы будут записаны заново. Данные не затрагиваются."
+LangString MsgRepair           ${LANG_ENGLISH} "The program files will be written again. Your data is not affected."
+LangString MsgRepair           ${LANG_SIMPCHINESE} "将重新写入程序文件。您的数据不受影响。"
+LangString MsgRepair           ${LANG_SPANISH} "Se volverán a escribir los archivos del programa. Sus datos no se modifican."
+LangString MsgRepair           ${LANG_FRENCH} "Les fichiers du programme seront réécrits. Vos données ne sont pas touchées."
+LangString MsgRepair           ${LANG_PORTUGUESEBR} "Os arquivos do programa serão gravados novamente. Seus dados não são afetados."
+
+LangString MsgDowngradeBlocked ${LANG_RUSSIAN} "Установлена более новая версия. Понижение версии заблокировано; для отката запустите установщик с параметром /FORCE."
+LangString MsgDowngradeBlocked ${LANG_ENGLISH} "A newer version is already installed. Downgrading is blocked; run the installer with /FORCE to roll back."
+LangString MsgDowngradeBlocked ${LANG_SIMPCHINESE} "已安装较新的版本。禁止降级；如需回退，请使用 /FORCE 参数运行安装程序。"
+LangString MsgDowngradeBlocked ${LANG_SPANISH} "Ya hay una versión más reciente. La degradación está bloqueada; use /FORCE para volver atrás."
+LangString MsgDowngradeBlocked ${LANG_FRENCH} "Une version plus récente est installée. Le retour en arrière est bloqué ; utilisez /FORCE pour l'autoriser."
+LangString MsgDowngradeBlocked ${LANG_PORTUGUESEBR} "Já existe uma versão mais recente. O downgrade está bloqueado; use /FORCE para reverter."
+
+LangString MsgInstalledIs      ${LANG_RUSSIAN} "Установлено: "
+LangString MsgInstalledIs      ${LANG_ENGLISH} "Installed: "
+LangString MsgInstalledIs      ${LANG_SIMPCHINESE} "已安装："
+LangString MsgInstalledIs      ${LANG_SPANISH} "Instalado: "
+LangString MsgInstalledIs      ${LANG_FRENCH} "Installé : "
+LangString MsgInstalledIs      ${LANG_PORTUGUESEBR} "Instalado: "
+
+LangString MsgThisIs           ${LANG_RUSSIAN} "В этом установщике: "
+LangString MsgThisIs           ${LANG_ENGLISH} "This installer contains: "
+LangString MsgThisIs           ${LANG_SIMPCHINESE} "此安装程序包含："
+LangString MsgThisIs           ${LANG_SPANISH} "Este instalador contiene: "
+LangString MsgThisIs           ${LANG_FRENCH} "Cet installateur contient : "
+LangString MsgThisIs           ${LANG_PORTUGUESEBR} "Este instalador contém: "
+
+LangString MsgClosingOld       ${LANG_RUSSIAN} "Закрывается запущенная копия..."
+LangString MsgClosingOld       ${LANG_ENGLISH} "Closing the running copy..."
+LangString MsgClosingOld       ${LANG_SIMPCHINESE} "正在关闭正在运行的副本..."
+LangString MsgClosingOld       ${LANG_SPANISH} "Cerrando la copia en ejecución..."
+LangString MsgClosingOld       ${LANG_FRENCH} "Fermeture de la copie en cours d'exécution..."
+LangString MsgClosingOld       ${LANG_PORTUGUESEBR} "Fechando a cópia em execução..."
 
 ; ---------------------------------------------------------------------------
 LangString AskRemoveOllama ${LANG_RUSSIAN} "Удалить также Ollama и все скачанные модели?$\r$\n$\r$\nМодели занимают несколько гигабайт; при повторной установке их придётся скачать заново.$\r$\n$\r$\nНажмите «Нет», чтобы сохранить Ollama для других программ."

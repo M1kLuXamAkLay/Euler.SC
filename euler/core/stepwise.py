@@ -20,7 +20,7 @@ import re
 import sympy as sp
 
 from .parser import ExprError, parse
-from .analysis import prepare, num, clean_expr
+from .analysis import prepare
 
 # Kept in sync with solver.SYSTEM_VARIABLES: both walk the same systems.
 SYSTEM_VARIABLES = "xyztuvw"
@@ -156,7 +156,7 @@ def _derivative_steps(expression: str) -> list[dict]:
                            f"f' = {' + '.join(f'({_tex(sp.diff(t, var))})' for t in terms[:6])}"))
     elif isinstance(expr, sp.Mul):
         steps.append(_step(2, "step.cap.product_rule",
-                           f"(uv)' = u'v + uv'"))
+                           "(uv)' = u'v + uv'"))
     elif expr.is_Pow:
         base, power = expr.as_base_exp()
         steps.append(_step(2, "step.cap.power_rule",
@@ -316,7 +316,7 @@ def _substitution_steps(left, right, var) -> list[dict]:
                 steps.append(_step(index, "step.cap.back_substitute",
                                    f"{_tex(candidate)} = {_tex(value)} \\Rightarrow {joined}"))
         steps.append(_step(len(steps) + 1, "step.cap.period",
-                           f"+ 2\\pi k,\\; k \\in \\mathbb{{Z}}"))
+                           "+ 2\\pi k,\\; k \\in \\mathbb{Z}"))
         return steps
     return []
 
@@ -610,7 +610,6 @@ def _system_steps(equations: list[str]) -> dict:
         return _result("step.title.system", [_msg_line("ExprError.need_relation")])
 
     augmented = sp.Matrix(rows)
-    coefficient = augmented[:, :-1]
     unknown_count = len(symbols)
 
     steps = [_step(1, "step.cap.system_matrix", sp.latex(augmented))]

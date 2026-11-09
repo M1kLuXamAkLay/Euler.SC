@@ -31,15 +31,21 @@ const state = {
   series: [],
   theme: 'auto',
   lastSolution: null,
-  // ALT history: the computed form and whether an alternative is showing
-  formAltActive: false,
-  formPrimaryLatex: null,
-  formPrimaryKey: null,
+  // ALT history, kept PER SURFACE. A single set of fields meant that pressing
+  // ALT in the calculator cycled the matrix answer that was computed last (and
+  // vice versa): both surfaces wrote to the same three variables.
+  answers: {
+    calc: { expr: '', latex: null, form: null, altActive: false, primaryLatex: null, primaryKey: null },
+    matrix: { expr: '', latex: null, form: null, altActive: false, primaryLatex: null, primaryKey: null },
+  },
   hardwareProfile: null,
   view: { xMin: -5, xMax: 5, yMin: -10, yMax: 10 },
   series: [],
   warm: false,
   lastMatrixResult: null,
+  // Bumped by AC and by every new evaluation: a late reply whose generation is
+  // stale must not paint over a field the user has already cleared.
+  matrixEvalSeq: 0,
   eqCount: 1,
 };
 
@@ -198,6 +204,30 @@ async function py(method, ...args) {
     throw new Error(detail);
   }
   return response.json();
+}
+
+/**
+ * Put the build number in the footer.
+ *
+ * The value comes from the engine's ``ping``, not from a constant here: the
+ * engine is what ships in the bundle, so if the interface and the engine
+ * disagree the footer shows the engine's answer and the mismatch is visible
+ * instead of silent.
+ */
+async function showVersion() {
+  const slot = $('#app-version');
+  if (!slot) return;
+  try {
+    const r = await py('ping');
+    if (r && r.version) {
+      slot.textContent = `v${r.version}`;
+      slot.title = `Σuler.SC ${r.version}`;
+    }
+  } catch {
+    // A missing number is better than a wrong one; the status line already
+    // reports an unreachable engine.
+    slot.textContent = '';
+  }
 }
 
 /**
@@ -371,6 +401,19 @@ function latexToPlain(latex) {
   );
   s = s.replace(MIXED, (_m, lead, whole, numerator, denominator) =>
     `${lead}(${whole}+(${numerator})/(${denominator}))`);
+
+  // --- matrix letter before a function ------------------------------------
+  // MathLive writes "A\sqrt{B}" when the user types A and then presses the
+  // root key. Plain substitution produced "Asqrt(B)": one identifier, which
+  // the parser rejects as an unknown name, so a matrix root looked impossible
+  // to calculate. A matrix letter and a following operation are always two
+  // operands, so an explicit product is inserted.
+  const MATRIX_LETTER = '([A-H])';
+  const MATRIX_FOLLOWERS = String.raw`\\(?:sqrt|cbrt|det|rank|inv|tr|operatorname|left)`;
+  s = s.replace(new RegExp(String.raw`(?<![A-Za-z\\])` + MATRIX_LETTER
+      + String.raw`\s*(?=` + MATRIX_FOLLOWERS + ')', 'g'), '$1*');
+  // ")\\sqrt{...}" is likewise a product, not a juxtaposition
+  s = s.replace(/\)\s*(?=\\(?:sqrt|cbrt|det|rank|inv|tr|operatorname))/g, ')*');
 
   // --- roots --------------------------------------------------------------
   s = s.replace(/\\sqrt\[([^\]]+)\]\{([^{}]*)\}/g, '(($2)**(1/($1)))');
@@ -704,6 +747,42 @@ function insertInto(selector, tex) {
   }
 }
 
+/**
+ * AC: empty the input AND the answer shown for it.
+ *
+ * The input is a MathLive math-field, which has no `value` property; assigning
+ * one left the formula on screen. The answer lives in a separate element on
+ * the matrix tab, and it was never cleared, so it stayed after AC.
+ */
+function clearCalculatorInput(targetSelector) {
+  const field = $(targetSelector);
+  if (field && typeof field.setValue === 'function') field.setValue('');
+  else if (field && 'value' in field) field.value = '';
+
+  if (targetSelector === '#lcd-input') {
+    setLcd('');
+    return;
+  }
+  if (targetSelector === '#mx-input') {
+    // Cancel whatever is in flight. Without this the request fired by "="
+    // landed a moment later and repainted the answer AC had just removed.
+    state.matrixEvalSeq += 1;
+    const out = $('#mx-out');
+    const form = $('#mx-form');
+    if (out) { out.innerHTML = ''; out.textContent = ''; out.className = 'lcd-out'; }
+    if (form) form.textContent = '';
+    // Clear this surface's ALT record too, or ALT after AC would cycle a value
+    // that is no longer on screen.
+    const ans = state.answers.matrix;
+    ans.expr = '';
+    ans.latex = null;
+    ans.form = null;
+    ans.altActive = false;
+    ans.primaryLatex = null;
+    ans.primaryKey = null;
+  }
+}
+
 function handleKeyAction(action, targetSelector) {
   if (!action) return;
 
@@ -721,8 +800,7 @@ function handleKeyAction(action, targetSelector) {
 
   switch (cmd) {
     case 'ac':
-      if (el) el.value = '';
-      if (targetSelector === '#lcd-input') setLcd('');
+      clearCalculatorInput(targetSelector);
       break;
     case 'del':
       if (el && el.executeCommand) el.executeCommand('deleteBackward');
@@ -744,7 +822,8 @@ function handleKeyAction(action, targetSelector) {
       insertInto(targetSelector, '\\mathrm{Ans}');
       break;
     case 'alt':
-      cycleAnswerForm();
+      // ALT acts on the surface whose field is focused, never on "the last answer".
+      cycleAnswerForm(targetSelector === '#mx-input' ? 'matrix' : 'calc');
       break;
     case 'eq':
       // The key doubles as "run" on the tabs that have a result display, and as
@@ -766,68 +845,95 @@ function handleKeyAction(action, targetSelector) {
  * 5 1/2, 11/2, 5.5 and 5.5e0 never loses precision.
  */
 /**
- * ALT: show an alternative form, then return to the original one.
+ * ALT: cycle the answer forms of ONE surface.
  *
- * Pressing ALT once shows the next representation; pressing it again puts the
- * answer back exactly as it was computed. A third press moves on to the next
- * alternative, so every available form stays reachable without trapping the
- * user in a cycle that never returns home.
- *
- * The value is recomputed from the original expression each time, so switching
- * between 5½, 11/2 and 5.5 never loses precision.
+ * ``surface`` is ``'calc'`` or ``'matrix'``. The two are independent: each keeps
+ * its own expression, its own latex and its own place in the ALT cycle, and
+ * paints into its own output element. They used to share three globals, so ALT
+ * in the calculator showed the matrix answer computed a minute earlier.
  */
-async function cycleAnswerForm() {
-  const expression = state.lastExpression || readField('#lcd-input');
+async function cycleAnswerForm(surface = 'calc') {
+  const ans = state.answers[surface];
+  if (!ans) return;
+
+  const expression = ans.expr || readField(surface === 'matrix' ? '#mx-input' : '#lcd-input');
   if (!expression || !expression.trim()) {
-    setLcd(t('err.empty'), { error: true });
+    showAnswerError(surface, t('err.empty'));
     return;
   }
+
+  // Second press: restore the form the engine chose.
+  if (ans.altActive && ans.primaryLatex) {
+    ans.altActive = false;
+    ans.form = ans.primaryKey;
+    ans.latex = ans.primaryLatex;
+    paintAnswer(surface, ans.primaryLatex, ans.primaryKey);
+    return;
+  }
+
+  try {
+    // First alternative of this answer: remember what to return to.
+    if (!ans.primaryLatex) {
+      ans.primaryLatex = ans.latex;
+      ans.primaryKey = ans.form;
+    }
+
+    const res = await py('cycle_form', expression, ans.form || 'auto');
+    if (!res || !res.ok) {
+      showAnswerError(surface, message(res && res.error) || t('common.error'));
+      return;
+    }
+
+    ans.altActive = true;
+    ans.form = res.key;
+    ans.latex = res.latex;
+    paintAnswer(surface, res.latex, res.key);
+  } catch (err) {
+    showAnswerError(surface, message(err.message) || String(err));
+  }
+}
 
 /** Localised name of an answer form ("exact", "decimal" ...), or empty. */
 function formLabel(key) {
   return key ? t(`form.${key}`) : '';
 }
 
-  // Second press: restore the form the engine chose.
-  if (state.formAltActive && state.formPrimaryLatex) {
-    state.formAltActive = false;
-    state.answerForm = state.formPrimaryKey;
-    state.answerLatex = state.formPrimaryLatex;
-    setLcdLatex(state.formPrimaryLatex);
-    const chip = $('#form-chip');
-    if (chip) chip.textContent = formLabel(state.formPrimaryKey);
+/** Paint an answer into the surface that owns it. */
+function paintAnswer(surface, latex, key) {
+  if (surface === 'matrix') {
+    const out = $('#mx-out');
+    if (!out) return;
+    out.className = 'lcd-out';
+    out.innerHTML = '';
+    if (latex) {
+      try {
+        out.innerHTML = window.MathLive.convertLatexToMarkup(latex, { displayMode: false });
+      } catch {
+        out.textContent = String(latex);
+      }
+    }
+    const form = $('#mx-form');
+    if (form) form.textContent = formLabel(key);
     return;
   }
 
-  try {
-    const res = await py('cycle_form', expression, state.answerForm || 'auto');
-    if (!res.ok) {
-      setLcd(message(res.error), { error: true });
-      return;
-    }
-
-    // First alternative of this answer: remember what to return to.
-    if (!state.formPrimaryLatex) {
-      state.formPrimaryLatex = state.answerLatex;
-      state.formPrimaryKey = state.answerForm;
-    }
-
-    state.formAltActive = true;
-    state.answerForm = res.key;
-    state.answerLatex = res.latex;
-    setLcdLatex(res.latex);
-    const chip = $('#form-chip');
-    if (chip) chip.textContent = formLabel(res.key);
-  } catch (err) {
-    setLcd(message(err.message), { error: true });
-  }
+  setLcd('', { latex: latex || '' });
+  const chip = $('#form-chip');
+  if (chip) chip.textContent = formLabel(key);
 }
 
+/** Error for a surface, in the element that surface shows results in. */
+function showAnswerError(surface, text) {
+  if (surface === 'matrix') {
+    const out = $('#mx-out');
+    if (!out) return;
+    out.className = 'lcd-out error';
+    out.textContent = text || t('common.error');
+    return;
+  }
+  setLcd(text || t('common.error'), { error: true });
+}
 
-/**
- * Show friendly guidance when the user makes a common mistake.
- * Called from every input handler before sending the request to Python.
- */
 function validateInput(value, context) {
   value = (value || '').trim();
 
@@ -863,18 +969,19 @@ async function evaluateCalculator() {
     const res = await py('solve', expr);
     if (res.ok) {
       state.ans = res.ans || res.plain || res.text;   // parser-readable, not LaTeX
-      state.lastExpression = expr;
-      state.answerForm = res.form_key || 'exact';
-      state.answerLatex = res.latex || res.result;
-      // A new computation starts a new form history
-      state.formAltActive = false;
-      state.formPrimaryLatex = null;
-      state.formPrimaryKey = null;
+      // A new computation starts a new form history for THIS surface only.
+      const ans = state.answers.calc;
+      ans.expr = expr;
+      ans.form = res.form_key || 'exact';
+      ans.latex = res.latex || res.result;
+      ans.altActive = false;
+      ans.primaryLatex = null;
+      ans.primaryKey = null;
       setLcd(res.result, { ms: res.elapsed_ms, latex: res.latex });
       state.history.unshift({ expr, result: res.result });
       if (state.history.length > 40) state.history.pop();
       const chip = $('#form-chip');
-      if (chip) chip.textContent = state.answerForm;
+      if (chip) chip.textContent = formLabel(ans.form);
     } else {
       setLcd(message(res.error) || t('common.error'), { error: true });
     }
@@ -1105,6 +1212,102 @@ function renderLegend() {
 const graphCanvas = $('#graph-canvas');
 const graphCtx = graphCanvas ? graphCanvas.getContext('2d') : null;
 
+/* Sampled data covers more than the visible window, so a pan or a small zoom
+ * does not run past the end of the polyline. The engine returns the curve only
+ * for the range it was asked for, so this margin is what keeps a line from
+ * stopping at the edge of the screen. */
+/**
+ * The range that is actually on screen.
+ *
+ * renderGraph widens the view so one unit has the same length on both axes;
+ * on a wide, short card that widens X well beyond state.view. Sampling
+ * state.view alone therefore produced a curve that stopped short of the canvas
+ * edge: at 1280x900 the plot showed -13.7..13.7 while the samples ended at
+ * 12.5, which is the "the graph breaks off" report.
+ */
+function visibleView(view, canvas) {
+  const target = canvas && canvas.width ? canvas.height / canvas.width : 0;
+  const spanX = view.xMax - view.xMin;
+  const spanY = view.yMax - view.yMin;
+  const out = { ...view };
+  if (!target || !Number.isFinite(target) || spanX <= 0 || spanY <= 0) return out;
+
+  const current = spanY / spanX;
+  if (current < target) {
+    const extra = (spanX * target - spanY) / 2;
+    out.yMin -= extra;
+    out.yMax += extra;
+  } else {
+    const extra = (spanY / target - spanX) / 2;
+    out.xMin -= extra;
+    out.xMax += extra;
+  }
+  return out;
+}
+
+/**
+ * The canvas currently showing the plot.
+ *
+ * The fullscreen overlay has a different shape from the inline card, and the
+ * visible X range depends on that shape. Sampling for the inline canvas and
+ * then drawing on the fullscreen one left the ends of the curve unsampled —
+ * the graph "broke off" exactly when the view was opened fullscreen.
+ */
+function activeGraphCanvas() {
+  const overlay = $('#graph-fullscreen');
+  if (overlay && !overlay.hidden && graphFullscreenCanvas) return graphFullscreenCanvas;
+  return graphCanvas;
+}
+
+/** The fetch window: the visible range plus a margin for panning. */
+function sampleWindow(view) {
+  // Measured against the canvas that is on screen, so the margin is applied to
+  // what is actually drawn rather than to the nominal view.
+  const canvas = activeGraphCanvas();
+  const rect = canvas ? canvas.getBoundingClientRect() : null;
+  const visible = visibleView(view, rect && rect.width ? { width: rect.width, height: rect.height } : null);
+  const width = visible.xMax - visible.xMin;
+  return { xMin: visible.xMin - width * SAMPLE_MARGIN,
+           xMax: visible.xMax + width * SAMPLE_MARGIN };
+}
+
+/* Extra range on each side, in view widths. It used to be 1.5, which spent
+ * two thirds of every fetch on coordinates the user could not see. The engine
+ * now refines densely where the curve is steep (see grapher._adaptive_grid),
+ * so a smaller margin buys a sharper picture where it counts. */
+const SAMPLE_MARGIN = 0.4;
+let coveredRange = null;        // {xMin, xMax, key} of the last successful fetch
+let fetchTimer = 0;
+
+/** Fetch samples for the visible range plus a margin.
+ *
+ * Returns without a request when the cached samples already cover the view
+ * and were computed for the same expressions; a pan inside the margin costs
+ * nothing, and only leaving it triggers a new request. */
+async function fetchSeries(fns, view) {
+  const key = fns.map((fn) => fn.expr).join('\u0001');
+  const want = sampleWindow(view);
+  if (coveredRange && coveredRange.key === key
+      && coveredRange.xMin <= view.xMin && coveredRange.xMax >= view.xMax) {
+    return true;
+  }
+
+  const seq = ++graphSeq;
+  // The base grid, in points. The engine refines up to its own ceiling on the
+  // intervals that need it; asking for the ceiling here would spend the whole
+  // budget uniformly and leave nothing for refinement.
+  const points = Math.min(4000, Math.round(900 * (1 + 2 * SAMPLE_MARGIN)));
+  const res = await py('plot', fns.map((fn) => fn.expr), want.xMin, want.xMax, points);
+  if (seq !== graphSeq) return false;
+  if (res.ok && res.series) {
+    state.series = res.series.flatMap((s, i) =>
+      s.segments.map((segment) => ({ segment, color: fns[i] ? fns[i].color : FN_COLORS[0] })));
+    coveredRange = { ...want, key };
+    return true;
+  }
+  return false;
+}
+
 async function drawGraph() {
   if (!graphCanvas || !graphCtx) return;
   if (!$('#view-analysis').classList.contains('active')) return;
@@ -1115,24 +1318,39 @@ async function drawGraph() {
   renderLegend();
   if (!fns.length) {
     state.series = [];
+    coveredRange = null;
     renderCanvas();
     return;
   }
 
-  const seq = ++graphSeq;
   try {
-    // Sampling density is what keeps a curve smooth: 2400 points across the
-    // visible span, so a wiggly function does not turn into a polygon.
-    const res = await py('plot', fns.map((fn) => fn.expr), state.view.xMin, state.view.xMax, 2400);
-    if (seq !== graphSeq) return;
-    if (res.ok && res.series) {
-      state.series = res.series.flatMap((s, i) =>
-        s.segments.map((segment) => ({ segment, color: fns[i] ? fns[i].color : FN_COLORS[0] })));
-    }
+    // A superseded request returns false: a newer one is already in flight and
+    // will draw itself. Drawing here would paint the old range over the new view.
+    const current = await fetchSeries(fns, state.view);
+    if (!current) return;
   } catch {
     // Graph non-critical: if core is busy, keep previous
   }
   renderCanvas();
+}
+
+/** Re-sample after a gesture left the covered range; debounced so a drag does
+ * not send a request per frame. */
+function scheduleResample() {
+  clearTimeout(fetchTimer);
+  fetchTimer = setTimeout(() => {
+    const fns = activeFunctions();
+    if (!fns.length) return;
+    fetchSeries(fns, state.view).then((ok) => {
+      if (ok) {
+        renderCanvas();
+        const overlay = $('#graph-fullscreen');
+        if (overlay && !overlay.hidden && graphFullscreenCtx) {
+          renderGraph(graphFullscreenCanvas, graphFullscreenCtx, true);
+        }
+      }
+    }).catch(() => {});
+  }, 120);
 }
 
 /**
@@ -1163,23 +1381,9 @@ function renderGraph(canvas, ctx, detailed = false) {
 
   // One unit is the same length on both axes, so a circle looks like a circle
   // and the curve is not stretched by the shape of the card.
-  const view = { ...state.view };
-  const spanX = view.xMax - view.xMin;
-  const spanY = view.yMax - view.yMin;
-  const targetRatio = h / w;
-  const currentRatio = spanY / spanX;
-
-  if (Number.isFinite(targetRatio) && Number.isFinite(currentRatio) && currentRatio > 0) {
-    if (currentRatio < targetRatio) {
-      const extra = (spanX * targetRatio - spanY) / 2;
-      view.yMin -= extra;
-      view.yMax += extra;
-    } else {
-      const extra = (spanY / targetRatio - spanX) / 2;
-      view.xMin -= extra;
-      view.xMax += extra;
-    }
-  }
+  // One helper decides the visible range, so the sampled window and the painted
+  // window can never drift apart.
+  const view = visibleView(state.view, { width: w, height: h });
 
   const { xMin, xMax, yMin, yMax } = view;
 
@@ -1408,9 +1612,8 @@ async function openFullscreenGraph() {
   const canvas = $('#graph-canvas-fs');
   if (!overlay || !canvas) return;
 
-  const title = $('#graph-title-fs');
-  if (title) title.textContent = t('analysis.graph');
-
+  // The header carries the drawing tools, not a caption: the plot needs no
+  // label, and the space beside it is where the tools live.
   overlay.hidden = false;
   graphFullscreenCanvas = canvas;
   graphFullscreenCtx = canvas.getContext('2d');
@@ -1420,12 +1623,28 @@ async function openFullscreenGraph() {
 
   renderGraph(canvas, graphFullscreenCtx, true);
   setupFullscreenControls();
+  setupDrawing();
+
+  // The overlay has its own aspect ratio, so the visible X range differs from
+  // the inline card's. Resample for it; the first frame above is drawn from the
+  // old samples and is replaced a moment later.
+  const fns = activeFunctions();
+  if (fns.length) {
+    fetchSeries(fns, state.view).then((ok) => {
+      if (!ok) return;
+      renderGraph(canvas, graphFullscreenCtx, true);
+      const overlayNow = $('#graph-fullscreen');
+      if (overlayNow && !overlayNow.hidden) paintDrawing();
+    }).catch(() => {});
+  }
 
   // Redraw on resize while the overlay is open
   if (window.__fsResize) window.removeEventListener('resize', window.__fsResize);
   window.__fsResize = () => {
     if (!overlay.hidden && graphFullscreenCtx) {
+      sizeDrawLayer();
       renderGraph(canvas, graphFullscreenCtx, true);
+      paintDrawing();
     }
   };
   window.addEventListener('resize', window.__fsResize);
@@ -1468,8 +1687,11 @@ function setupFullscreenControls() {
   };
 
   const mousedown = (event) => {
-    if (event.button !== 0) return;
-    drag = { ...point(event), view: { ...state.view } };
+    // Both buttons pan: the draw layer forwards the press of whichever slot
+    // holds the hand, so refusing the right button here made "hand on the right
+    // mouse button" do nothing at all.
+    if (event.button !== 0 && event.button !== 2) return;
+    drag = { ...point(event), button: event.button, view: { ...state.view } };
     canvas.style.cursor = 'grabbing';
     event.preventDefault();
   };
@@ -1480,6 +1702,10 @@ function setupFullscreenControls() {
     fsPending = requestAnimationFrame(() => {
       fsPending = 0;
       renderGraph(canvas, graphFullscreenCtx, true);
+      // Strokes live in world coordinates, so any view change moves them.
+      // Without this the ink stayed glued to the window while the plot moved
+      // underneath it — the "drawing stays attached to the camera" report.
+      paintDrawing();
     });
   };
 
@@ -1499,6 +1725,7 @@ function setupFullscreenControls() {
       yMax: drag.view.yMax + dy * spanY,
     };
     fsDraw();
+    scheduleResample();
   };
 
   const mouseup = () => {
@@ -1530,6 +1757,7 @@ function setupFullscreenControls() {
       yMax: cy + (yMax - cy) * factor,
     };
     fsDraw();
+    scheduleResample();
   };
 
   canvas.onmousedown = mousedown;
@@ -1538,9 +1766,17 @@ function setupFullscreenControls() {
   canvas.onmouseleave = mouseup;
   canvas.onwheel = wheel;
 
+  // Returns whether the overlay really closed. The Escape handler used to
+  // remove itself BEFORE knowing the outcome, so once the user cancelled the
+  // confirmation the overlay stayed open and Escape was dead for the rest of
+  // the session.
   const close = () => {
+    // A drawing is work the user made by hand: leaving the view by accident
+    // must not throw it away silently.
+    if (drawing.strokes.length && !window.confirm(t('draw.confirm_close'))) return false;
     const overlay = $('#graph-fullscreen');
     if (overlay) overlay.hidden = true;
+    teardownDrawing();
     canvas.onmousedown = null;
     canvas.onmousemove = null;
     canvas.onmouseup = null;
@@ -1552,21 +1788,36 @@ function setupFullscreenControls() {
     }
     graphFullscreenCanvas = null;
     graphFullscreenCtx = null;
+    // The covered range was measured for the overlay's shape; force a refetch
+    // for the inline card instead of drawing samples that do not fit it.
+    coveredRange = null;
     drawGraph();
+    return true;
   };
 
   const closeButton = $('#btn-close-graph');
   if (closeButton) closeButton.onclick = close;
 
-  // Escape closes the overlay: a fullscreen view with only a small X is a trap
-  document.addEventListener('keydown', function onEscape(event) {
+  // Escape closes the overlay: a fullscreen view with only a small X is a trap.
+  // The handler stays attached until the overlay actually closes, so a
+  // cancelled confirmation does not silently disable the shortcut.
+  const onEscape = (event) => {
     if (event.key !== 'Escape') return;
+    // A text label being typed owns the Escape key (it abandons the label)
+    if (drawing.editing) return;
     const overlay = $('#graph-fullscreen');
-    if (overlay && !overlay.hidden) {
-      close();
+    if (overlay && !overlay.hidden && overlay.contains(document.activeElement) === false
+        && document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (overlay && !overlay.hidden && close()) {
       document.removeEventListener('keydown', onEscape);
     }
-  });
+  };
+  document.addEventListener('keydown', onEscape);
+  // One open adds one listener; teardown must not leave a second one behind.
+  if (window.__fsEscape && window.__fsEscape !== onEscape) {
+    document.removeEventListener('keydown', window.__fsEscape);
+  }
+  window.__fsEscape = onEscape;
 
   const reset = $('#btn-fs-reset');
   if (reset) reset.onclick = () => {
@@ -1574,6 +1825,966 @@ function setupFullscreenControls() {
     renderGraph(canvas, graphFullscreenCtx, true);
   };
 
+}
+
+/* ============================================================ FREEHAND DRAWING
+ *
+ * A drawing layer over the fullscreen plot. Strokes are stored in SCREEN
+ * coordinates, like sheets of paper laid over the graph: panning and zooming
+ * move the plot under the drawing rather than moving the drawing with the plot.
+ * That keeps a hand-drawn note where the user put it on the screen.
+ *
+ * The eraser removes whole strokes it touches. Pixel erasing would leave
+ * fragments that are hard to undo and hard to see, so an erase is one action.
+ */
+
+/**
+ * World <-> screen mapping for the fullscreen plot.
+ *
+ * renderGraph fits the view to the canvas so one unit has the same length on
+ * both axes; the drawing layer must use the SAME mapping or a stroke lands
+ * somewhere the user did not click. Everything here mirrors that fit exactly.
+ */
+function graphMapping() {
+  const canvas = graphFullscreenCanvas;
+  const rect = canvas ? canvas.getBoundingClientRect() : null;
+  if (!rect || !rect.width || !rect.height) return null;
+
+  const view = visibleView(state.view, { width: rect.width, height: rect.height });
+  const spanX = view.xMax - view.xMin;
+  const spanY = view.yMax - view.yMin;
+  if (!(spanX > 0) || !(spanY > 0)) return null;
+
+  const w = rect.width;
+  const h = rect.height;
+  return {
+    w, h, view,
+    toX: (x) => ((x - view.xMin) / spanX) * w,
+    toY: (y) => h - ((y - view.yMin) / spanY) * h,
+    fromX: (px) => view.xMin + (px / w) * spanX,
+    fromY: (py) => view.yMin + ((h - py) / h) * spanY,
+    // Pixels per world unit on the X axis. Equal on Y by construction.
+    pxPerUnit: w / spanX,
+  };
+}
+
+/**
+ * Drawing layer over the fullscreen plot.
+ *
+ * Strokes are stored in WORLD coordinates — the same numbers the axes show, not
+ * pixels. The first version stored screen pixels, which made the drawing a
+ * sheet of glass in front of the camera: zooming in left the ink the same size
+ * and stuck to the window instead of the curve, and a label could hang off the
+ * plot into the margin. World coordinates make annotations behave like
+ * physical ink on the paper: zoom in and they grow and drift with the graph.
+ *
+ * Widths are stored in screen pixels AS THEY WERE at creation, together with
+ * the scale of that moment, so a stroke keeps its apparent thickness when the
+ * user draws and then scales proportionally afterwards.
+ *
+ * The eraser rubs out what it touches: a freehand line is cut where the eraser
+ * passes, leaving the rest. Shapes (line, rectangle, circle) and labels are
+ * removed whole, because half a circle is not a useful object.
+ */
+const drawing = {
+  // Two independent slots, as in a paint program: the left button and the
+  // right button each hold their own tool. Left-click a tool to put it in the
+  // left slot, right-click to put it in the right slot.
+  tool: 'hand',          // left slot
+  right: 'eraser',       // right slot
+  selectedId: null,      // id of the stroke the select tool holds
+  dashed: false,         // draw the next pen/line/arrow/shape dashed
+  unitHint: 1,           // world units per screen pixel scale, for marker labels
+  color: '#2e1c20',
+  width: 2,
+  strokes: [],           // {tool, color, widthPx, scale0, points:[{x,y}], text?}
+  current: null,         // stroke being drawn (world coordinates)
+  editing: null,         // text input element while a label is being typed
+  erasing: false,        // eraser drag in progress (it has no stroke object)
+  canvas: null,
+  ctx: null,
+  handlers: null,
+};
+
+/** The tool bound to a mouse button: 2 is the right button, anything else left. */
+function toolFor(button) {
+  return button === 2 ? drawing.right : drawing.tool;
+}
+
+/** Screen font size for a label at the chosen stroke width.
+ *  A 2 px stroke gives 18 px: readable on the plot without shouting. */
+function textFontSize(width) {
+  return Math.max(18, Math.round(width * 6));
+}
+
+/** A stroke's on-screen line width, scaled for the current zoom. */
+function strokeWidthNow(stroke, map) {
+  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
+  return Math.max(0.6, stroke.widthPx * ratio);
+}
+
+/** A label's on-screen font size, scaled for the current zoom. */
+function strokeFontNow(stroke, map) {
+  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
+  return Math.max(4, stroke.fontPx * ratio);
+}
+
+/* ---------------------------------------------------------------- painting
+ *
+ * Every stroke is painted through its affine transform. The matrix is applied
+ * to the original points on each paint, so moving, scaling and rotating never
+ * rewrite the geometry (see drawgeom.js). Widths and font sizes are stored with
+ * the zoom they were created at and scaled by the current zoom, so ink grows and
+ * shrinks with the plot instead of staying a fixed size on the window.
+ */
+
+/** Redraw every stroke, the selection frame and the in-progress stroke. */
+function paintDrawing() {
+  const { canvas, ctx } = drawing;
+  if (!canvas || !ctx) return;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = canvas.width / Math.max(rect.width, 1);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const map = graphMapping();
+  if (!map) return;
+
+  // Nothing may be painted outside the plot: a label at the edge used to spill
+  // into the white margin below the canvas.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, map.w, map.h);
+  ctx.clip();
+
+  const all = drawing.current ? [...drawing.strokes, drawing.current] : drawing.strokes;
+  for (const stroke of all) paintStroke(ctx, stroke, map);
+  if (drawing.selectedId) paintSelection(ctx, map);
+
+  ctx.restore();
+}
+
+/** Screen-space stroke width for a stroke at the current zoom. */
+function strokeWidthNow(stroke, map) {
+  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
+  return Math.max(0.6, stroke.widthPx * ratio);
+}
+
+/** Screen-space font size for a label at the current zoom. */
+function strokeFontNow(stroke, map) {
+  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
+  return Math.max(4, stroke.fontPx * ratio);
+}
+
+/** Pixel position of a world point. */
+function toScreen(map, p) {
+  return { x: map.toX(p.x), y: map.toY(p.y) };
+}
+
+function paintStroke(ctx, stroke, map) {
+  const pts = DrawGeom.transformedPoints(stroke);
+  if (!pts.length) return;
+
+  const width = strokeWidthNow(stroke, map);
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+  ctx.lineWidth = width;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.setLineDash(stroke.dash ? DrawGeom.dashPattern(width) : []);
+
+  if (stroke.tool === 'marker') {
+    paintMarker(ctx, stroke, pts[0], map, width);
+    return;
+  }
+
+  if (stroke.tool === 'text') {
+    // Text is filled, not stroked: ctx.stroke() would outline the glyphs.
+    const size = strokeFontNow(stroke, map);
+    const at = toScreen(map, pts[0]);
+    ctx.font = `${size}px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.textBaseline = 'top';
+    ctx.fillText(stroke.text || '', at.x, at.y);
+    return;
+  }
+
+  const sp = pts.map((p) => toScreen(map, p));
+  ctx.beginPath();
+  if (stroke.tool === 'pen') {
+    ctx.moveTo(sp[0].x, sp[0].y);
+    for (let i = 1; i < sp.length; i++) ctx.lineTo(sp[i].x, sp[i].y);
+    if (sp.length === 1) ctx.arc(sp[0].x, sp[0].y, width / 2, 0, Math.PI * 2);
+  } else if (stroke.tool === 'line' || stroke.tool === 'arrow') {
+    const a = sp[0], b = sp[sp.length - 1];
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  } else if (stroke.tool === 'rect') {
+    const a = sp[0], b = sp[sp.length - 1];
+    ctx.rect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  } else if (stroke.tool === 'circle') {
+    const a = sp[0], b = sp[sp.length - 1];
+    ctx.arc(a.x, a.y, Math.hypot(b.x - a.x, b.y - a.y), 0, Math.PI * 2);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (stroke.tool === 'arrow' && sp.length > 1) {
+    // The head is sized from the stroke width, not from the plot, so it stays a
+    // readable arrowhead at every zoom and does not swallow a short arrow.
+    const head = DrawGeom.arrowHead(sp[0], sp[sp.length - 1], Math.max(10, width * 4));
+    ctx.beginPath();
+    ctx.moveTo(sp[sp.length - 1].x, sp[sp.length - 1].y);
+    ctx.lineTo(head[0].x, head[0].y);
+    ctx.moveTo(sp[sp.length - 1].x, sp[sp.length - 1].y);
+    ctx.lineTo(head[1].x, head[1].y);
+    ctx.stroke();
+  }
+}
+
+/** A marker is a dot with a coordinate label beside it. */
+function paintMarker(ctx, stroke, world, map, width) {
+  const at = toScreen(map, world);
+  const r = Math.max(3, width * 1.6);
+  ctx.beginPath();
+  ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  const size = Math.max(12, strokeFontNow(stroke, map) * 0.8);
+  ctx.font = `${size}px ${getComputedStyle(document.body).fontFamily}`;
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(markerLabel(world), at.x + r + 4, at.y - 2);
+}
+
+/** "(x, y)" with a precision that matches the zoom: far in, more digits. */
+function markerLabel(p) {
+  const digits = Math.min(4, Math.max(0, Math.round(-Math.log10(Math.max(1e-9, drawing.unitHint || 1)))) + 1);
+  const fmt = (v) => Number(v.toFixed(digits)).toString();
+  return `(${fmt(p.x)}, ${fmt(p.y)})`;
+}
+
+/* -------------------------------------------------------------- selection */
+
+/** Hit radius for selection and handles, in CSS pixels. */
+const SELECT_PX = 8;
+const HANDLE_PX = 7;
+
+/** Index of the topmost stroke under a world point, or -1. */
+function hitStroke(world, map) {
+  const reach = SELECT_PX / map.pxPerUnit;
+  for (let i = drawing.strokes.length - 1; i >= 0; i--) {
+    const stroke = drawing.strokes[i];
+    const tb = textWorldBox(stroke, map);
+    const d = DrawGeom.strokeDistance(stroke, world, tb);
+    const reachStroke = reach + strokeWidthNow(stroke, map) / (2 * map.pxPerUnit);
+    if (d <= reachStroke) return i;
+  }
+  return -1;
+}
+
+/** A label's box in world units, from its measured screen size. */
+function textWorldBox(stroke, map) {
+  if (stroke.tool !== 'text') return null;
+  const size = strokeFontNow(stroke, map);
+  const ctx = drawing.ctx;
+  let w = size * (stroke.text || '').length * 0.55;
+  if (ctx) {
+    ctx.save();
+    ctx.font = `${size}px ${getComputedStyle(document.body).fontFamily}`;
+    w = ctx.measureText(stroke.text || '').width;
+    ctx.restore();
+  }
+  return { w: w / map.pxPerUnit, h: size / map.pxPerUnit };
+}
+
+/** Selected stroke, if it still exists. */
+function selectedStroke() {
+  return drawing.strokes.find((s) => s.id === drawing.selectedId) || null;
+}
+
+/**
+ * The frame and handles around the selected stroke. Eight scale handles and a
+ * rotation handle above the top edge. Drawn in screen pixels, so they keep a
+ * usable size at every zoom.
+ */
+function paintSelection(ctx, map) {
+  const stroke = selectedStroke();
+  if (!stroke) return;
+  const box = selectionBox(stroke, map);
+  if (!box) return;
+
+  ctx.save();
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#2f5fb3';
+  ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+  ctx.setLineDash([]);
+
+  for (const h of handlePositions(box)) {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#2f5fb3';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(h.x - HANDLE_PX / 2, h.y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
+    ctx.strokeRect(h.x - HANDLE_PX / 2, h.y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
+  }
+
+  // rotation handle: a stalk and a circle above the top edge
+  const top = { x: (box.x0 + box.x1) / 2, y: box.y0 };
+  const knob = { x: top.x, y: box.y0 - 22 };
+  ctx.beginPath();
+  ctx.moveTo(top.x, top.y);
+  ctx.lineTo(knob.x, knob.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(knob.x, knob.y, HANDLE_PX / 2 + 1, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Screen box of the selected stroke, padded so handles sit outside the ink. */
+function selectionBox(stroke, map) {
+  const b = DrawGeom.bounds(stroke, 0);
+  if (!b) return null;
+  const tb = textWorldBox(stroke, map);
+  const maxX = tb ? Math.max(b.maxX, b.minX + tb.w) : b.maxX;
+  const maxY = tb ? Math.max(b.maxY, b.minY + tb.h) : b.maxY;
+  const pad = 6;
+  const p0 = toScreen(map, { x: b.minX, y: b.minY });
+  const p1 = toScreen(map, { x: maxX, y: maxY });
+  let x0 = Math.min(p0.x, p1.x) - pad, y0 = Math.min(p0.y, p1.y) - pad;
+  let x1 = Math.max(p0.x, p1.x) + pad, y1 = Math.max(p0.y, p1.y) + pad;
+  // A horizontal or vertical stroke has no extent across its line; pad it to a
+  // minimum size so the frame and its handles stay separate and grabbable.
+  const MIN = 24;
+  if (y1 - y0 < MIN) { const c = (y0 + y1) / 2; y0 = c - MIN / 2; y1 = c + MIN / 2; }
+  if (x1 - x0 < MIN) { const c = (x0 + x1) / 2; x0 = c - MIN / 2; x1 = c + MIN / 2; }
+  return { x0, y0, x1, y1 };
+}
+
+/** Eight scale handles, in the order nw, n, ne, e, se, s, sw, w. */
+function handlePositions(box) {
+  const mx = (box.x0 + box.x1) / 2;
+  const my = (box.y0 + box.y1) / 2;
+  return [
+    { id: 'nw', x: box.x0, y: box.y0 }, { id: 'n', x: mx, y: box.y0 },
+    { id: 'ne', x: box.x1, y: box.y0 }, { id: 'e', x: box.x1, y: my },
+    { id: 'se', x: box.x1, y: box.y1 }, { id: 's', x: mx, y: box.y1 },
+    { id: 'sw', x: box.x0, y: box.y1 }, { id: 'w', x: box.x0, y: my },
+  ];
+}
+
+/** What is under a screen point while something is selected. */
+function selectionHit(px, py, map) {
+  const stroke = selectedStroke();
+  if (!stroke) return null;
+  const box = selectionBox(stroke, map);
+  if (!box) return null;
+  const knob = { x: (box.x0 + box.x1) / 2, y: box.y0 - 22 };
+  if (Math.hypot(px - knob.x, py - knob.y) <= HANDLE_PX + 3) return { kind: 'rotate' };
+  // Handles first (they are small), then the body. The handle hit box is
+  // limited to HANDLE_PX around its centre, so the body is reachable everywhere
+  // else inside the frame, even on a thin line.
+  // A handle is hit only within a small square around its own centre. The
+  // frame is padded to a minimum height (see selectionBox), so a thin line's
+  // edge handles no longer reach its middle.
+  const reach = HANDLE_PX / 2 + 2;
+  for (const h of handlePositions(box)) {
+    if (Math.abs(px - h.x) <= reach && Math.abs(py - h.y) <= reach) {
+      return { kind: 'scale', handle: h.id };
+    }
+  }
+  if (px >= box.x0 && px <= box.x1 && py >= box.y0 && py <= box.y1) return { kind: 'move' };
+  return null;
+}
+
+/* ---------------------------------------------------------------- erasing */
+
+/** Distance in world units that the eraser disc covers at this zoom. */
+function eraserRadius(map) {
+  return ERASER_PX / (2 * map.pxPerUnit);
+}
+
+/**
+ * Rub out whatever lies under the eraser. Freehand ink is cut, shapes, arrows,
+ * markers and labels go whole. Freehand strokes are baked first, because the
+ * cut works on the final points, not on a transform.
+ */
+function eraseAt(world, radiusWorld, map) {
+  let changed = false;
+  const kept = [];
+
+  for (const raw of drawing.strokes) {
+    const stroke = raw.m ? DrawGeom.baked(raw) : raw;
+    const tb = textWorldBox(stroke, map);
+    const distance = DrawGeom.strokeDistance(stroke, world, tb);
+    const reach = radiusWorld + strokeWidthNow(stroke, map) / (2 * map.pxPerUnit);
+
+    if (distance > reach) { kept.push(stroke); continue; }
+    changed = true;
+
+    if (stroke.tool !== 'pen') continue;      // shapes, arrows, labels: whole
+
+    for (const run of DrawGeom.cutPolyline(stroke.points, world, reach)) {
+      kept.push({ ...stroke, id: DrawGeom.newStrokeId(), points: run });
+    }
+  }
+
+  if (changed) {
+    drawing.strokes = kept;
+    if (!selectedStroke()) drawing.selectedId = null;
+  }
+  return changed;
+}
+
+/* ----------------------------------------------------------------- pointer */
+
+function drawingPoint(event) {
+  const rect = drawing.canvas.getBoundingClientRect();
+  const map = graphMapping();
+  if (!map) return { x: 0, y: 0 };
+  return {
+    x: map.fromX(event.clientX - rect.left),
+    y: map.fromY(event.clientY - rect.top),
+  };
+}
+
+/** Pointer position in CSS pixels, used only to place the text box. */
+function screenPoint(event) {
+  const rect = drawing.canvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+/* Tools that put marks on the layer. `hand` is deliberately absent: it must
+ * leave the pointer free for the plot canvas, whose own handlers already pan
+ * and zoom. Duplicating that logic here would give two behaviours to keep in
+ * sync, and they would drift. `select` is here because it owns the layer. */
+const DRAWING_TOOLS = new Set(['select', 'pen', 'dashed', 'line', 'arrow', 'text', 'marker', 'rect', 'circle', 'eraser']);
+
+/** Eraser diameter on screen, in CSS pixels. */
+const ERASER_PX = 18;
+
+function setDrawingEnabled(enabled) {
+  const layer = $('#draw-canvas');
+  if (!layer) return;
+  // Either slot can draw, so the layer listens while at least one of them is a
+  // drawing tool. The cursor follows the LEFT slot.
+  const draws = enabled && (DRAWING_TOOLS.has(drawing.tool) || DRAWING_TOOLS.has(drawing.right));
+  const active = enabled && DRAWING_TOOLS.has(drawing.tool);
+  layer.classList.toggle('is-drawing', draws);
+  layer.classList.toggle('is-erasing', active && drawing.tool === 'eraser');
+  layer.classList.toggle('is-text', active && drawing.tool === 'text');
+  layer.style.cursor = active && (drawing.tool === 'text' || drawing.tool === 'marker') ? 'text' : '';
+}
+
+function setToolButtons() {
+  // A tool is "on" when it holds either slot; the L / R badge shows which.
+  $$('.draw-tool').forEach((b) => {
+    const tool = b.dataset.tool;
+    const left = tool === drawing.tool;
+    const right = tool === drawing.right;
+    b.setAttribute('aria-pressed', String(left || right));
+    b.dataset.slot = left && right ? 'LR' : left ? 'L' : right ? 'R' : '';
+  });
+  const layer = $('#draw-canvas');
+  if (layer) layer.dataset.tool = drawing.tool;
+  $$('.draw-color').forEach((b) =>
+    b.setAttribute('aria-pressed', String(b.dataset.color === drawing.color)));
+  $$('.draw-width').forEach((b) =>
+    b.setAttribute('aria-pressed', String(Number(b.dataset.width) === drawing.width)));
+  const dash = $('#btn-draw-dash');
+  if (dash) dash.setAttribute('aria-pressed', String(!!drawing.dashed));
+}
+
+function sizeDrawLayer() {
+  const layer = $('#draw-canvas');
+  const stage = layer && layer.parentElement;
+  if (!layer || !stage) return;
+  const rect = stage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  layer.width = Math.round(rect.width * dpr);
+  layer.height = Math.round(rect.height * dpr);
+}
+
+/* ------------------------------------------------------------------- text */
+
+/**
+ * Open a text box where the user clicked. The label is stored in world
+ * coordinates with the zoom of this moment (see drawgeom.js).
+ */
+function beginTextInput(screen, world, map) {
+  cancelTextInput();
+  const stage = $('#draw-canvas') && $('#draw-canvas').parentElement;
+  if (!stage) return;
+
+  const sizePx = textFontSize(drawing.width);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'draw-text-input';
+  input.style.left = `${screen.x}px`;
+  input.style.top = `${screen.y}px`;
+  input.style.fontSize = `${sizePx}px`;
+  input.style.color = drawing.color;
+  input.placeholder = t('draw.text.placeholder');
+  stage.appendChild(input);
+  clampTextInput(input, stage);
+  drawing.editing = input;
+  input.focus();
+
+  // Committing removes the input, and removing a focused input fires `blur`,
+  // which would commit a second time. One flag makes the first commit final.
+  let settled = false;
+  const commit = () => {
+    if (settled) return;
+    settled = true;
+    const text = input.value.trim();
+    cancelTextInput();
+    if (!text) return;
+    pushDrawHistory();
+    drawing.strokes.push({
+      id: DrawGeom.newStrokeId(),
+      tool: 'text', color: drawing.color, widthPx: drawing.width,
+      fontPx: sizePx, scale0: map.pxPerUnit,
+      points: [world], text,
+    });
+    paintDrawing();
+  };
+  const abandon = () => {
+    settled = true;
+    cancelTextInput();
+  };
+
+  input.addEventListener('keydown', (event) => {
+    // The overlay's own shortcuts (P, L, ...) must not fire while typing
+    event.stopPropagation();
+    if (event.key === 'Enter') { event.preventDefault(); commit(); }
+    if (event.key === 'Escape') { event.preventDefault(); abandon(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+/** Textual size of a label, derived from the chosen stroke width. */
+function textFontSize(width) {
+  return Math.max(18, Math.round(width * 6));
+}
+
+/**
+ * Keep the open text box inside the plot rectangle. The stage is as tall as
+ * the dialog, which includes the legend strip below the canvas.
+ */
+function clampTextInput(input, stage) {
+  if (!input || !stage) return;
+  const canvas = graphFullscreenCanvas;
+  if (!canvas) return;
+  const box = canvas.getBoundingClientRect();
+  const stageBox = stage.getBoundingClientRect();
+  const width = input.offsetWidth || 120;
+  const left = Math.min(parseFloat(input.style.left || '0'), box.width - width - 4);
+  const top = Math.min(parseFloat(input.style.top || '0'), box.height - input.offsetHeight - 4);
+  input.style.left = `${Math.max(0, left)}px`;
+  input.style.top = `${Math.max(0, top)}px`;
+  input.style.marginLeft = `${box.left - stageBox.left}px`;
+  input.style.marginTop = `${box.top - stageBox.top}px`;
+}
+
+/** Remove the open text box without committing it. */
+function cancelTextInput() {
+  const input = drawing.editing;
+  drawing.editing = null;
+  if (input && input.parentElement) input.parentElement.removeChild(input);
+}
+
+/* ------------------------------------------------------------- lifecycle */
+
+/** Wire the drawing layer and toolbar; called each time the overlay opens. */
+function setupDrawing() {
+  const layer = $('#draw-canvas');
+  if (!layer) return;
+  drawing.canvas = layer;
+  drawing.ctx = layer.getContext('2d');
+  drawHistory.length = 0;
+  sizeDrawLayer();
+  paintDrawing();
+  setToolButtons();
+  setDrawingEnabled(drawing.tool !== 'none');
+
+  let panning = false;
+  // The gesture in progress: which stroke, what kind of drag, and where it began.
+  let gesture = null;
+
+  const forward = (event, type) => {
+    const plot = graphFullscreenCanvas;
+    if (!plot) return;
+    plot.dispatchEvent(new MouseEvent(type, {
+      button: event.button === undefined ? 0 : event.button,
+      buttons: event.buttons === undefined ? 1 : event.buttons,
+      clientX: event.clientX, clientY: event.clientY,
+      bubbles: true, cancelable: true,
+    }));
+  };
+
+  const down = (event) => {
+    if (event.button !== 0 && event.button !== 2) return;
+    const tool = toolFor(event.button);
+    if (tool === 'hand') {
+      panning = true;
+      forward(event, 'mousedown');
+      layer.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    if (!DRAWING_TOOLS.has(tool)) return;
+
+    const p = drawingPoint(event);
+    const map = graphMapping();
+    if (!map) return;
+    const sp = screenPoint(event);
+
+    if (tool === 'select') {
+      gesture = beginSelectGesture(sp, p, map);
+      if (gesture) layer.setPointerCapture(event.pointerId);
+      paintDrawing();
+      event.preventDefault();
+      return;
+    }
+
+    if (tool === 'text') {
+      beginTextInput(sp, p, map);
+      event.preventDefault();
+      return;
+    }
+
+    if (tool === 'marker') {
+      // One click, one marker: it is a value, not a drag path
+      pushDrawHistory();
+      drawing.strokes.push({
+        id: DrawGeom.newStrokeId(), tool: 'marker', color: drawing.color,
+        widthPx: drawing.width, fontPx: textFontSize(drawing.width),
+        scale0: map.pxPerUnit, points: [p],
+      });
+      paintDrawing();
+      event.preventDefault();
+      return;
+    }
+
+    if (tool === 'eraser') {
+      if (eraseAt(p, eraserRadius(map), map)) paintDrawing();
+      drawing.erasing = true;
+    } else {
+      drawing.current = {
+        id: DrawGeom.newStrokeId(),
+        tool, color: drawing.color,
+        widthPx: drawing.width,
+        fontPx: textFontSize(drawing.width),
+        scale0: map.pxPerUnit,
+        dash: tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'circle'
+          ? !!drawing.dashed : false,
+        points: [p],
+      };
+      if (tool === 'pen' && drawing.dashed) drawing.current.tool = 'pen';
+    }
+    layer.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const move = (event) => {
+    if (panning) { forward(event, 'mousemove'); return; }
+    const p = drawingPoint(event);
+    const map = graphMapping();
+    if (!map) return;
+
+    if (gesture) { applySelectGesture(gesture, p, map, event); paintDrawing(); return; }
+
+    // The eraser check comes FIRST: an erase drag has no `current` stroke.
+    if (drawing.erasing) {
+      if (eraseAt(p, eraserRadius(map), map)) paintDrawing();
+      return;
+    }
+
+    const cur = drawing.current;
+    if (!cur) return;
+    if (cur.tool === 'pen') cur.points.push(p);
+    else cur.points[1] = p;                  // shapes keep only their end points
+    paintDrawing();
+  };
+
+  const up = (event) => {
+    if (panning) {
+      panning = false;
+      forward(event, 'mouseup');
+      return;
+    }
+    if (gesture) { endSelectGesture(gesture); gesture = null; paintDrawing(); return; }
+    if (drawing.erasing) { drawing.erasing = false; return; }
+
+    const cur = drawing.current;
+    drawing.current = null;
+    if (!cur) { paintDrawing(); return; }
+    // A click without a drag draws nothing for shapes, one dot for the pen
+    if (cur.tool !== 'pen' && cur.points.length < 2) { paintDrawing(); return; }
+    pushDrawHistory();
+    drawing.strokes.push(cur);
+    paintDrawing();
+  };
+
+  layer.onpointerdown = down;
+  layer.onpointermove = move;
+  layer.onpointerup = up;
+  layer.onpointercancel = up;
+
+  // The right button draws here, so the layer must not open the browser menu.
+  layer.oncontextmenu = (event) => event.preventDefault();
+
+  // The layer sits above the plot and receives the wheel while a tool is
+  // active. Forward it, so zoom works with every tool.
+  layer.onwheel = (event) => {
+    const plot = graphFullscreenCanvas;
+    if (!plot) return;
+    event.preventDefault();
+    plot.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: event.deltaY, deltaMode: event.deltaMode,
+      clientX: event.clientX, clientY: event.clientY,
+      bubbles: false, cancelable: true,
+    }));
+  };
+
+  // Left-click assigns the left slot, right-click the right one.
+  $$('.draw-tool').forEach((b) => {
+    b.onclick = (event) => {
+      event.preventDefault();
+      drawing.tool = b.dataset.tool;
+      if (drawing.tool !== 'select') drawing.selectedId = null;
+      setToolButtons();
+      setDrawingEnabled(true);
+      paintDrawing();
+    };
+    b.oncontextmenu = (event) => {
+      event.preventDefault();
+      drawing.right = b.dataset.tool;
+      setToolButtons();
+      setDrawingEnabled(true);
+    };
+  });
+  $$('.draw-color').forEach((b) => {
+    b.onclick = () => {
+      drawing.color = b.dataset.color;
+      applyToSelection((s) => ({ ...s, color: drawing.color }));
+      setToolButtons();
+    };
+  });
+  $$('.draw-width').forEach((b) => {
+    b.onclick = () => {
+      drawing.width = Number(b.dataset.width);
+      applyToSelection((s) => ({ ...s, widthPx: drawing.width, fontPx: textFontSize(drawing.width) }));
+      setToolButtons();
+    };
+  });
+
+  const dash = $('#btn-draw-dash');
+  if (dash) dash.onclick = () => {
+    drawing.dashed = !drawing.dashed;
+    applyToSelection((s) => (s.tool === 'pen' || s.tool === 'line' || s.tool === 'arrow'
+      || s.tool === 'rect' || s.tool === 'circle') ? { ...s, dash: drawing.dashed } : s);
+    setToolButtons();
+  };
+
+  const undo = $('#btn-draw-undo');
+  if (undo) undo.onclick = undoDrawing;
+  const clear = $('#btn-draw-clear');
+  if (clear) clear.onclick = () => {
+    if (!drawing.strokes.length) return;
+    if (!window.confirm(t('draw.confirm_clear'))) return;
+    pushDrawHistory();
+    drawing.strokes = [];
+    drawing.selectedId = null;
+    paintDrawing();
+  };
+
+  drawing.handlers = { keydown: onDrawKey, resize: () => { sizeDrawLayer(); paintDrawing(); } };
+  document.addEventListener('keydown', onDrawKey);
+  window.addEventListener('resize', drawing.handlers.resize);
+}
+
+/* ------------------------------------------------- select / move / scale / rotate */
+
+/**
+ * Start a select gesture. Pressing a handle scales or rotates the selection;
+ * pressing inside its frame moves it; pressing elsewhere picks a new stroke or
+ * clears the selection.
+ */
+function beginSelectGesture(sp, world, map) {
+  const current = selectedStroke();
+  if (current) {
+    const hit = selectionHit(sp.x, sp.y, map);
+    if (hit) {
+      const before = current;
+      return {
+        mode: hit.kind, handle: hit.handle || null,
+        startWorld: world, startStroke: before,
+        // Rotation: remember the angle of the press around the pivot.
+        pivot: DrawGeom.centroid(before),
+        startAngle: Math.atan2(world.y - DrawGeom.centroid(before).y,
+                               world.x - DrawGeom.centroid(before).x),
+        pushed: false,
+      };
+    }
+  }
+  const index = hitStroke(world, map);
+  drawing.selectedId = index >= 0 ? drawing.strokes[index].id : null;
+  if (index < 0) return null;
+  return {
+    mode: 'move', handle: null, startWorld: world,
+    startStroke: drawing.strokes[index], pushed: false,
+  };
+}
+
+/** Continue a select gesture from its starting stroke, never from the last frame. */
+function applySelectGesture(g, world, map, event) {
+  const id = g.startStroke.id;
+  const index = drawing.strokes.findIndex((s) => s.id === id);
+  if (index < 0) return;
+  if (!g.pushed) { pushDrawHistory(); g.pushed = true; }
+
+  let next;
+  if (g.mode === 'move') {
+    next = DrawGeom.translated(g.startStroke,
+      world.x - g.startWorld.x, world.y - g.startWorld.y);
+  } else if (g.mode === 'scale') {
+    next = scaleFromHandle(g.startStroke, g.handle, world, g.startWorld, map);
+  } else if (g.mode === 'rotate') {
+    const angle = Math.atan2(world.y - g.pivot.y, world.x - g.pivot.x);
+    next = DrawGeom.rotated(g.startStroke, angle - g.startAngle, g.pivot.x, g.pivot.y);
+  } else {
+    return;
+  }
+  drawing.strokes[index] = next;
+}
+
+/** Scale about the OPPOSITE handle, so the far edge stays where it is. */
+function scaleFromHandle(stroke, handle, world, startWorld, map) {
+  const box = DrawGeom.bounds(stroke, 0);
+  if (!box) return stroke;
+  const anchor = {
+    x: handle.includes('w') ? box.maxX : handle.includes('e') ? box.minX : (box.minX + box.maxX) / 2,
+    y: handle.includes('n') ? box.maxY : handle.includes('s') ? box.minY : (box.minY + box.maxY) / 2,
+  };
+  const grab = { x: handle.includes('w') ? box.minX : handle.includes('e') ? box.maxX : anchor.x,
+                 y: handle.includes('n') ? box.minY : handle.includes('s') ? box.maxY : anchor.y };
+  // The reference length is the stroke's own extent along the grabbed axis, or
+  // the whole extent when that axis is flat (a horizontal line has no height,
+  // so grabbing its top edge alone would divide by zero).
+  const spanX = box.maxX - box.minX;
+  const spanY = box.maxY - box.minY;
+  const extent = Math.max(spanX, spanY, 1e-9);
+  const d0 = Math.max(Math.hypot(grab.x - anchor.x, grab.y - anchor.y), extent * 0.02);
+  const d1 = Math.hypot(world.x - anchor.x, world.y - anchor.y);
+  const factor = Math.min(20, Math.max(0.05, d1 / d0));
+  return DrawGeom.scaled(stroke, factor, anchor.x, anchor.y);
+}
+
+function endSelectGesture() {
+  // Nothing to commit: the history snapshot was taken when the first change happened.
+}
+
+/** Apply a change to the selected stroke (colour, width, dash), with undo. */
+function applyToSelection(change) {
+  const stroke = selectedStroke();
+  if (!stroke) return;
+  const index = drawing.strokes.indexOf(stroke);
+  pushDrawHistory();
+  drawing.strokes[index] = change(stroke);
+  paintDrawing();
+}
+
+/* ---------------------------------------------------------------- history */
+
+/** Snapshots so any edit can be undone, including erases and transforms. */
+const drawHistory = [];
+
+function pushDrawHistory() {
+  drawHistory.push(JSON.stringify(drawing.strokes));
+  if (drawHistory.length > 60) drawHistory.shift();
+}
+
+function undoDrawing() {
+  if (drawHistory.length) {
+    drawing.strokes = JSON.parse(drawHistory.pop());
+    if (!selectedStroke()) drawing.selectedId = null;
+    paintDrawing();
+    return;
+  }
+  if (!drawing.strokes.length) return;
+  drawing.strokes.pop();
+  paintDrawing();
+}
+
+/** Shortcuts for the drawing tools. Ignored while typing into a field. */
+function onDrawKey(event) {
+  const overlay = $('#graph-fullscreen');
+  if (!overlay || overlay.hidden) return;
+  if (event.target && /INPUT|TEXTAREA|MATH-FIELD/.test(event.target.tagName)) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    undoDrawing();
+    return;
+  }
+  const map = {
+    h: 'hand', v: 'select', p: 'pen', l: 'line', a: 'arrow', t: 'text', m: 'marker',
+    r: 'rect', o: 'circle', e: 'eraser',
+  };
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (drawing.selectedId) {
+      event.preventDefault();
+      pushDrawHistory();
+      drawing.strokes = drawing.strokes.filter((x) => x.id !== drawing.selectedId);
+      drawing.selectedId = null;
+      paintDrawing();
+    }
+    return;
+  }
+  if (event.key === 'Escape' && drawing.selectedId) {
+    drawing.selectedId = null;
+    paintDrawing();
+    return;
+  }
+  if (event.key.toLowerCase() === 'd' && !event.ctrlKey && !event.metaKey) {
+    const dash = $('#btn-draw-dash');
+    if (dash) dash.click();
+    return;
+  }
+  const tool = map[event.key.toLowerCase()];
+  if (tool && !event.ctrlKey && !event.metaKey) {
+    drawing.tool = tool;
+    setToolButtons();
+    setDrawingEnabled(true);
+  }
+}
+
+function teardownDrawing() {
+  if (drawing.handlers) {
+    document.removeEventListener('keydown', onDrawKey);
+    window.removeEventListener('resize', drawing.handlers.resize);
+    drawing.handlers = null;
+  }
+  const layer = $('#draw-canvas');
+  if (layer) {
+    layer.onpointerdown = null;
+    layer.onpointermove = null;
+    layer.onpointerup = null;
+    layer.onpointercancel = null;
+    layer.onwheel = null;
+    layer.oncontextmenu = null;
+  }
+  cancelTextInput();
+  drawing.strokes = [];
+  drawing.current = null;
+  drawing.erasing = false;
+  drawing.canvas = null;
+  drawing.ctx = null;
+  drawHistory.length = 0;
 }
 
 /* Pan and zoom */
@@ -1969,19 +3180,26 @@ async function evaluateMatrixExpression() {
 
   const out = $('#mx-out');
   const form = $('#mx-form');
+  const seq = ++state.matrixEvalSeq;      // this evaluation owns the output
   out.className = 'lcd-out';
   out.textContent = '\u2026';
 
   try {
     const res = await py('solve', expr);
+    // AC (or a newer evaluation) happened while this one was running
+    if (seq !== state.matrixEvalSeq) return;
     if (!res.ok) {
       out.className = 'lcd-out error';
       out.textContent = message(res.error) || t('common.error');
       return;
     }
-    state.lastExpression = expr;
-    state.answerLatex = res.latex || res.result;
-    state.answerForm = res.form_key || 'exact';
+    const ans = state.answers.matrix;
+    ans.expr = expr;
+    ans.latex = res.latex || res.result;
+    ans.form = res.form_key || 'exact';
+    ans.altActive = false;
+    ans.primaryLatex = null;
+    ans.primaryKey = null;
     // No mode label here: the field already says what tab this is, and a
     // "3 × 3" tag next to a result read as if it belonged to the answer.
     if (form) form.textContent = '';
@@ -1997,6 +3215,7 @@ async function evaluateMatrixExpression() {
       out.textContent = res.result;
     }
   } catch (err) {
+    if (seq !== state.matrixEvalSeq) return;
     out.className = 'lcd-out error';
     out.textContent = message(err.message) || String(err);
   }
@@ -2252,6 +3471,48 @@ function balanceMath(text) {
   return out;
 }
 
+/* Tags and attributes a model answer may use. Everything else is dropped.
+ * marked passes raw HTML through unchanged, so a model reply containing
+ * <img onerror=...> ran script in the application's origin (verified in
+ * headless Chromium before this fix). */
+const SAFE_TAGS = new Set([
+  'P', 'BR', 'STRONG', 'EM', 'B', 'I', 'CODE', 'PRE', 'UL', 'OL', 'LI',
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'HR', 'TABLE', 'THEAD',
+  'TBODY', 'TR', 'TH', 'TD', 'A', 'SPAN', 'DIV', 'DEL', 'SUB', 'SUP',
+]);
+const SAFE_ATTRS = new Set(['href', 'title', 'class', 'align', 'colspan', 'rowspan']);
+const SAFE_URL = /^(https?:|mailto:|#)/i;
+
+/** Remove anything that could execute, keeping the formatting tags.
+ * Works on a detached document, so nothing is fetched or run while cleaning. */
+function sanitizeHtml(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const walk = (node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      if (!SAFE_TAGS.has(child.tagName)) {
+        // Unknown elements (script, img, iframe, svg...) go, text is kept
+        child.replaceWith(doc.createTextNode(child.textContent || ''));
+        continue;
+      }
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase();
+        const keep = SAFE_ATTRS.has(name)
+          && !(name === 'href' && !SAFE_URL.test(attr.value.trim()));
+        if (!keep) child.removeAttribute(attr.name);
+      }
+      if (child.tagName === 'A') {
+        child.setAttribute('rel', 'noopener noreferrer');
+        child.setAttribute('target', '_blank');
+      }
+      walk(child);
+    }
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+
 function renderMarkdown(src) {
   if (!src) return '';
   const store = [];
@@ -2263,7 +3524,9 @@ function renderMarkdown(src) {
     return `\uE000${store.length - 1}\uE001`;
   });
 
-  let html = marked.parse(withoutMath);
+  // Sanitise the markdown output BEFORE formulas are re-inserted: MathLive's
+  // markup is trusted engine output and must not be stripped by the filter.
+  let html = sanitizeHtml(marked.parse(withoutMath));
 
   html = html.replace(/\uE000(\d+)\uE001/g, (_, i) => {
     const item = store[Number(i)];
@@ -3629,10 +4892,23 @@ async function exportGraphPdf() {
   const status = $('#graph-fs-status');
   if (!canvas || !canvas.width || !status) return;
   status.textContent = '\u2026';
+
+  // The drawing lives on its own layer, so sending the plot canvas alone
+  // dropped every annotation the user had just made. Composite them first.
+  const merged = document.createElement('canvas');
+  merged.width = canvas.width;
+  merged.height = canvas.height;
+  const mctx = merged.getContext('2d');
+  mctx.drawImage(canvas, 0, 0);
+  const layer = $('#draw-canvas');
+  if (layer && layer.width === canvas.width && layer.height === canvas.height) {
+    mctx.drawImage(layer, 0, 0);
+  }
+
   const payload = {
     width: canvas.width,
     height: canvas.height,
-    rgb: canvasRgbBase64(canvas),
+    rgb: canvasRgbBase64(merged),
     title: activeFunctions().map((fn) => `y = ${fn.expr}`).join(', '),
     language: I18n.get(),
   };
@@ -3681,7 +4957,22 @@ async function startSetup(method, args = []) {
 
 /* ============================================================ INITIALIZATION */
 
+/** Drop the boot cloak once the interface is fully built.
+ *
+ * The keypad, matrix grid and equation row are created from JavaScript, so the
+ * first frames showed an empty calculator body above an empty key grid. CSS
+ * hides .app while <html data-booting> is set; this removes it. A timer covers
+ * the case where a later step throws: a visible, working interface is always
+ * better than a permanently blank window.
+ */
+function revealInterface() {
+  document.documentElement.removeAttribute('data-booting');
+}
+
 async function init() {
+  // Safety net: never leave the window cloaked, whatever happens below
+  setTimeout(revealInterface, 3000);
+
   // 0) Keypad and event wiring first: they depend only on the DOM.
   //    A failure anywhere else must not leave the interface inert.
   try {
@@ -3720,6 +5011,15 @@ async function init() {
   } catch (err) {
     console.error('chat init failed', err);
   }
+
+  // Build identity in the footer, before the cloak lifts. A frozen bundle ships
+  // its own copy of app/web, so "my change did not apply" is usually a stale
+  // install rather than a bug; the number makes that answerable at a glance.
+  showVersion();
+
+  // The interface is complete: lift the boot cloak before the engine poll, so
+  // the user sees a ready keypad while the status line reports the warm-up.
+  revealInterface();
 
   // 4) Engine: the page is served over loopback HTTP, so readiness is a fetch
   connectEvents();

@@ -35,14 +35,14 @@ _SCALAR_NAMES = frozenset({
     "sin", "cos", "tan", "cot", "ctg", "sec", "csc",
     "asin", "acos", "atan", "arcsin", "arccos", "arctan",
     "sinh", "cosh", "tanh",
-    "sqrt", "cbrt", "exp", "log", "ln", "lg", "log10", "Abs", "abs",
+    "sqrt", "cbrt", "root", "exp", "log", "ln", "lg", "log10", "Abs", "abs",
     "factorial", "floor", "ceiling", "sign",
     "Min", "Max", "deg", "rad",
 })
 
 # Matrix identifiers and operations. Only usable when a registry is present.
 _MATRIX_NAMES = frozenset("ABCDEFGH")
-_MATRIX_FUNCS = frozenset({"rank", "det", "inv", "trace", "transpose", "T", "rref", "eigenvals"})
+_MATRIX_FUNCS = frozenset({"rank", "det", "inv", "trace", "transpose", "T", "rref", "eigenvals", "root"})
 
 _ALLOWED_TOKEN_TYPES = frozenset({
     tokenize.NAME, tokenize.NUMBER, tokenize.OP,
@@ -91,10 +91,26 @@ def validate(expr: str, with_matrices: bool = False) -> str:
     return expr
 
 
+def _matrix_root_expr(value, degree=2):
+    """``sqrt``/``root`` that accept a matrix as well as a scalar.
+
+    For a scalar this is the ordinary root. For a square matrix it is the
+    principal root through the eigen-decomposition (see matrix.matrix_root).
+    """
+    if isinstance(value, sp.MatrixBase):
+        from .matrix import matrix_root
+        return matrix_root(value, sp.Integer(int(degree)))
+    if degree == 2:
+        return sp.sqrt(value)
+    return sp.Pow(value, sp.Rational(1, int(degree)))
+
+
 def _matrix_locals(matrices: dict[str, sp.Matrix]) -> dict:
     """Expose matrices plus the matrix operations that may appear in expressions."""
     scope = dict(matrices)
     scope.update({
+        "sqrt": _matrix_root_expr,
+        "root": lambda m, n=2: _matrix_root_expr(m, n),
         "rank": lambda m: m.rank(),
         "det": lambda m: m.det(),
         "inv": lambda m: m.inv(),
@@ -138,6 +154,7 @@ def _scalar_locals(var) -> dict:
         "arcsin": sp.asin, "arccos": sp.acos, "arctan": sp.atan,
         "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
         "sqrt": sp.sqrt, "cbrt": lambda v: sp.Pow(v, sp.Rational(1, 3)),
+        "root": lambda v, n=2: sp.Pow(v, sp.Rational(1, 1) / n),
         "exp": sp.exp,
         # "log" is the base-10 key: its inverse on the keypad is 10^x, and a
         # logarithm that ignored the base sat next to "ln" doing the same thing.
@@ -147,8 +164,11 @@ def _scalar_locals(var) -> dict:
         "factorial": sp.factorial,
         "floor": sp.floor, "ceiling": sp.ceiling, "sign": sp.sign,
         "Min": sp.Min, "Max": sp.Max,
+        # deg(v): an angle given in degrees -> radians.  rad(v): an angle given
+        # in radians -> degrees.  They were both v*pi/180, so rad(pi/2) became
+        # sin(pi^2/360) for a student who meant sin(90 degrees).
         "deg": lambda v: v * sp.pi / 180,
-        "rad": lambda v: v * sp.pi / 180,
+        "rad": lambda v: v * 180 / sp.pi,
     }
 
 
@@ -184,6 +204,43 @@ def _expand_percent(expr: str) -> str:
     expr = _PERCENT_OF.sub(percent_of, expr)
     expr = _PERCENT_ANY.sub(lambda m: f"(({m.group(1)})/100)", expr)
     return expr
+
+# Functions whose arguments are comma-separated: inside their brackets a comma
+# between digits is a separator, not a decimal mark. "root(27,3)" is the cube
+# root of 27; read as a decimal it became root(27.3).
+_CALLS_WITH_ARGUMENTS = ("root",)
+
+
+def _decimal_commas_outside_calls(expr: str) -> str:
+    """Turn decimal commas into points, except inside a multi-argument call."""
+    out: list[str] = []
+    depth_call = 0          # bracket depth inside a call that takes arguments
+    stack: list[bool] = []  # for every open bracket: is it such a call?
+    index = 0
+    while index < len(expr):
+        char = expr[index]
+        if char == "(":
+            name = re.search(r"([A-Za-z_]+)$", "".join(out))
+            stack.append(bool(name and name.group(1) in _CALLS_WITH_ARGUMENTS))
+            depth_call += stack[-1]
+            out.append(char)
+        elif char == ")":
+            if stack and stack.pop():
+                depth_call -= 1
+            out.append(char)
+        elif char == "," and depth_call == 0:
+            # A comma between two digits is a decimal mark
+            before = "".join(out)
+            after = expr[index + 1:index + 2]
+            if before[-1:].isdigit() and after.isdigit() and not re.search(r"[\w.]$", before[:-1] or " "):
+                out.append(".")
+            else:
+                out.append(char)
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
 
 _DECIMAL_COMMA = re.compile(r"(?<![\w)])(-?\d+),(\d+)")
 _MIXED_FRACTION = re.compile(r"(?<![\w.)])(-?\d+)\s+(\d+)/(\d+)")
@@ -252,7 +309,7 @@ def preprocess(raw: str) -> str:
     # Decimal comma: "1,5" means 1.5 in most of Europe, and OCR returns it that
     # way. A comma between two digits is a decimal separator; a comma after a
     # name or bracket is an argument separator and stays.
-    expr = _DECIMAL_COMMA.sub(r"\1.\2", expr)
+    expr = _decimal_commas_outside_calls(expr)
 
     # Percent, calculator convention: "78 + 7%" is 78 + 7% *of 78*, not 78 + 0.07
     expr = _expand_percent(expr)

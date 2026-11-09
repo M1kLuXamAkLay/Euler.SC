@@ -356,7 +356,6 @@ def _format_set(solution, var_name: str) -> str:
 
 def _periodic(image_set) -> str:
     """Convert ``ImageSet`` into ``2\u03c0k`` style notation."""
-    from .analysis import clean_expr
 
     try:
         lam = image_set.args[0]
@@ -378,6 +377,10 @@ def _periodic(image_set) -> str:
         return text
     except (AttributeError, IndexError, TypeError):
         return str(image_set)
+
+
+# 0^0 or 0**0 with nothing but whitespace-free digits around it, e.g. "0^0", "2+0^0"
+_ZERO_POWER = re.compile(r"(?<![\w.])0\s*(\^|\*\*)\s*0(?![\w.])")
 
 
 def evaluate(text: str, matrices: dict | None = None) -> dict:
@@ -405,15 +408,23 @@ def evaluate(text: str, matrices: dict | None = None) -> dict:
         if isinstance(result, sp.logic.boolalg.Boolean) or isinstance(result, sp.Rel):
             return ok(sp.latex(result) and str(result).replace("**", "^"))
         if not isinstance(result, sp.Basic):
-            raise ExprError(f"ExprError.generic")
+            raise ExprError("ExprError.generic")
 
         if result is sp.nan or result is sp.zoo:
             return err("ExprError.div_zero")
+        # 0^0 is 1 by convention in SymPy, but it is an indeterminate form in
+        # limits and a common trap in homework: say so instead of silently
+        # printing 1. The value is still returned, with the note attached.
         if result.has(sp.oo) and not result.is_number:
             return err("ExprError.infinite")
 
         simplified = sp.simplify(result)
-        return ok_value(simplified)
+        payload = ok_value(simplified)
+        # Convention, not a derivation. The parser folds 0^0 to 1 before this
+        # point, so the caveat is decided from the source text.
+        if _ZERO_POWER.search(text):
+            payload["note"] = "ExprError.zero_power_convention"
+        return payload
     except ExprError as exc:
         return err(str(exc))
     except (ZeroDivisionError, ValueError, TypeError):

@@ -218,6 +218,129 @@ def power(grid: list[list[str]], exponent_text: str) -> dict:
     return _result("matrix.op.power", matrix ** exponent)
 
 
+def matrix_root(matrix: sp.MatrixBase, degree: sp.Expr) -> sp.Matrix:
+    """Principal n-th root of a square matrix.
+
+    Two paths, chosen by the eigenvalues:
+
+    * **Rational eigenvalues** (diagonal, triangular, integer-spectrum matrices
+      and everything a student types by hand): A = P D P^-1 gives
+      A^(1/n) = P D^(1/n) P^-1 exactly. The entries are rationalised, so
+      ``sqrt(diag(4, 9))`` prints ``2`` and ``3`` rather than ``2.0``.
+
+    * **Irrational or complex eigenvalues** (a generic 3x3, for instance): the
+      exact path is unusable. SymPy's own ``A ** (1/2)`` builds expressions such
+      as ``(1457/27 + 2*sqrt(105747)*I/9)**(1/3)``, and simplifying the product
+      P D^(1/n) P^-1 with those does not terminate in reasonable time — the
+      matrix tab simply hung. Those matrices are evaluated numerically instead
+      and the result is rounded, which is what a student needs from a root of
+      an arbitrary matrix.
+
+    A defective matrix (a Jordan block such as [[1, 1], [0, 1]]) has no full
+    set of eigenvectors, so the first path refuses it; the numeric path still
+    handles it through the eigendecomposition of its floating-point image,
+    where the defect is a rounding artefact rather than an exact identity.
+
+    Eigenvalues use the principal branch, the same convention SymPy applies to
+    scalars: a negative eigenvalue gives a complex root, which is correct for
+    that branch.
+    """
+    _require_square(matrix)
+    if degree == 0:
+        raise ExprError("ExprError.root_degree_zero")
+    degree = sp.Integer(int(degree))
+
+    eigenvalues = matrix.eigenvals()
+    rational = all(value.is_rational for value in eigenvalues)
+
+    if rational:
+        try:
+            return _exact_root(matrix, degree)
+        except (ValueError, TypeError, ZeroDivisionError,
+                sp.matrices.exceptions.MatrixError) as exc:
+            # MatrixError is NOT a ValueError: it inherits straight from
+            # Exception, so a defective matrix escaped this handler and the
+            # whole call failed instead of taking the path below.
+            #
+            # The direct rational power handles exactly the case the
+            # eigendecomposition refuses: a Jordan block has a square root,
+            # [[1, 1/2], [0, 1]], and SymPy computes it symbolically in no time.
+            if not isinstance(exc, sp.matrices.exceptions.MatrixError):
+                raise
+        try:
+            return sp.simplify(matrix ** (sp.Integer(1) / degree))
+        except (ValueError, TypeError, ZeroDivisionError,
+                sp.matrices.exceptions.MatrixError):
+            pass
+    return _numeric_root(matrix, degree)
+
+
+def _exact_root(matrix: sp.MatrixBase, degree: int) -> sp.Matrix:
+    """P D^(1/n) P^-1 with rational entries kept rational.
+
+    ``nsimplify`` is applied per entry instead of ``simplify`` on the whole
+    product: the latter tries to canonicalise every radical at once and is the
+    slow part, while each entry here is a short rational combination.
+    """
+    basis, diagonal = matrix.diagonalize()
+    roots = sp.diag(*[sp.Rational(diagonal[i, i]) ** sp.Rational(1, degree)
+                      for i in range(diagonal.rows)])
+    product = basis * roots * basis.inv()
+    return sp.Matrix(product.rows, product.cols,
+                     lambda i, j: sp.nsimplify(sp.radsimp(product[i, j]), rational=True))
+
+
+def _numeric_root(matrix: sp.MatrixBase, degree: int) -> sp.Matrix:
+    """Eigen-decomposition in floating point, rounded for display.
+
+    A matrix that SymPy cannot diagonalise exactly still has one numerically
+    unless it is genuinely defective, so a failing decomposition is reported
+    rather than guessed at.
+    """
+    try:
+        decomposition = matrix.evalf().eigenvects()
+    except (ValueError, TypeError):
+        raise ExprError("ExprError.root_not_diagonalizable") from None
+
+    if not decomposition:
+        raise ExprError("ExprError.root_not_diagonalizable")
+
+    size = matrix.rows
+    basis = sp.zeros(size, size)
+    diagonal = sp.zeros(size, size)
+    column = 0
+    for value, _multiplicity, basis_vectors in matrix.evalf().eigenvects():
+        for vector in basis_vectors:
+            if column >= size:
+                break
+            for row in range(size):
+                basis[row, column] = sp.nsimplify(vector[row])
+            diagonal[column, column] = sp.nsimplify(value) ** (sp.Integer(1) / degree)
+            column += 1
+
+    if column < size:
+        raise ExprError("ExprError.root_not_diagonalizable")
+
+    try:
+        product = basis * diagonal * basis.inv()
+    except (ValueError, ZeroDivisionError, sp.matrices.exceptions.NonInvertibleMatrixError):
+        raise ExprError("ExprError.root_not_diagonalizable") from None
+
+    # 2 decimals is the precision the rest of the matrix tab prints with.
+    return sp.Matrix(product.rows, product.cols,
+                     lambda i, j: sp.N(product[i, j], 6))
+
+
+def root(grid: list[list[str]], degree_text: str = "2") -> dict:
+    """The n-th root of a square matrix; ``degree_text`` defaults to 2 (square root)."""
+    matrix = to_matrix(grid)
+    degree = _scalar(degree_text or "2")
+    if not degree.is_Integer or int(degree) < 2 or int(degree) > 8:
+        raise ExprError("ExprError.root_degree_range")
+    result = matrix_root(matrix, sp.Integer(int(degree)))
+    return _result("matrix.op.root", result)
+
+
 def solve_linear(left_grid: list[list[str]], right_grid: list[list[str]]) -> dict:
     """Solve ``A x = B`` including degenerate cases."""
     matrix = to_matrix(left_grid)
@@ -262,6 +385,7 @@ OPERATIONS = {
     "eigen": eigenvalues,
     "eigenvec": eigenvectors,
     "lu": lu,
+    "root": root,
 }
 
 
@@ -292,6 +416,11 @@ def run(operation: str, first: list[list[str]],
 
     if operation == "power":
         return power(first, extra)
+
+    # The degree of a root is an argument, not a fixed 2: without this line
+    # the "cube root" request silently returned the square root.
+    if operation == "root":
+        return root(first, extra or "2")
 
     if operation == "system":
         if second is None:

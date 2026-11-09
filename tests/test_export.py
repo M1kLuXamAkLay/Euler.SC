@@ -51,5 +51,6 @@ def test_graph_pdf_embeds_the_image():
     {"width": 40, "height": 20, "rgb": "!!not-base64!!"},
 ])
 def test_graph_pdf_rejects_bad_payload(payload):
-    with pytest.raises(Exception):
+    # binascii.Error and our ExprError both derive from ValueError
+    with pytest.raises(ValueError):
         exporter.to_graph_pdf(payload)

@@ -5,26 +5,20 @@ Run directly; exit code 1 means at least one failure.
 """
 from __future__ import annotations
 
-import signal
 import sys
-import traceback
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+_HERE = __import__("pathlib").Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE))          # so ``_guard`` resolves on any launch path
 
 from euler.core import analysis, calculus, exporter, format as fmt, matrix, solver, stepwise
 
 TIMEOUT = 25
 
+# The per-case timeout lives in _guard so it can be tested on its own: importing
+# this module runs the whole sweep.
+from _guard import Timeout, run_guarded  # noqa: E402
 
-class Timeout(Exception):
-    pass
-
-
-def _alarm(_signum, _frame):
-    raise Timeout()
-
-
-signal.signal(signal.SIGALRM, _alarm)
 
 def _ok_dict(outcome) -> dict:
     """Normalise the many result shapes into one for the check()."""
@@ -52,9 +46,8 @@ results: list[tuple[str, bool, str]] = []
 
 
 def check(name: str, fn, expect_ok: bool = True, contains: str | None = None) -> None:
-    signal.alarm(TIMEOUT)
     try:
-        outcome = _ok_dict(fn())
+        outcome = _ok_dict(run_guarded(fn, TIMEOUT))
         if isinstance(outcome, dict):
             ok = bool(outcome.get("ok"))
             detail = str(outcome.get("latex") or outcome.get("text") or outcome.get("error") or "")[:64]
@@ -71,8 +64,6 @@ def check(name: str, fn, expect_ok: bool = True, contains: str | None = None) ->
         results.append((name, False, "TIMEOUT"))
     except Exception as exc:                       # noqa: BLE001
         results.append((name, False, f"{type(exc).__name__}: {exc}"[:64]))
-    finally:
-        signal.alarm(0)
 
 
 # ---------------------------------------------------------------- arithmetic
@@ -388,7 +379,7 @@ def _profanity_masked():
         "сука, я ошибся": ("с", "а"),
     }
     bad = []
-    for phrase, (first, last) in cases.items():
+    for phrase, (first, _last) in cases.items():
         masked = guard.mask_profanity(phrase)
         if "*" not in masked or not masked.strip().startswith(first) and first not in masked:
             bad.append(masked)
