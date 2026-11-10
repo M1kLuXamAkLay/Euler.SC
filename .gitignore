@@ -47,3 +47,5 @@ settings.json
 .env
 .env.local
 .ruff_cache/
+
+node_modules/

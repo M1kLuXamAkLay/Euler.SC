@@ -202,8 +202,8 @@ def _expand_percent(expr: str) -> str:
         return f"({base}{sign}({base})*({rate})/100)"
 
     expr = _PERCENT_OF.sub(percent_of, expr)
-    expr = _PERCENT_ANY.sub(lambda m: f"(({m.group(1)})/100)", expr)
-    return expr
+    return _PERCENT_ANY.sub(lambda m: f"(({m.group(1)})/100)", expr)
+
 
 # Functions whose arguments are comma-separated: inside their brackets a comma
 # between digits is a separator, not a decimal mark. "root(27,3)" is the cube
@@ -242,7 +242,6 @@ def _decimal_commas_outside_calls(expr: str) -> str:
     return "".join(out)
 
 
-_DECIMAL_COMMA = re.compile(r"(?<![\w)])(-?\d+),(\d+)")
 _MIXED_FRACTION = re.compile(r"(?<![\w.)])(-?\d+)\s+(\d+)/(\d+)")
 _FACTORIAL = re.compile(r"(\d+(?:\.\d+)?|[a-zA-Z]\w*|\([^()]*\))!")
 
@@ -385,6 +384,20 @@ def _humanize(exc: Exception) -> str:
     if "factorial" in msg or "gamma" in msg:
         return "ExprError.factorial_domain"
     return "ExprError.generic"
+
+
+RELATIONS = ("<=", ">=", "!=", "<", ">", "=")
+_RELATION_SYMBOLS = str.maketrans({"\u2264": "<=", "\u2265": ">=", "\u2260": "!="})
+
+
+def split_relation(text: str) -> tuple[str, str, str] | None:
+    """Split ``left op right`` on the first relation found, two-character symbols first."""
+    text = text.translate(_RELATION_SYMBOLS)
+    for op in RELATIONS:
+        if op in text:
+            left, right = text.split(op, 1)
+            return left.strip(), op, right.strip()
+    return None
 
 
 def detect_variable(text: str) -> str:

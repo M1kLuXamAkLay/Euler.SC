@@ -6,7 +6,7 @@
 
 **A symbolic calculator with a local AI tutor. No account, no cloud, no telemetry.**
 
-[![Version](https://img.shields.io/badge/version-5.2.3-c96b7a?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-5.2.4-c96b7a?style=flat-square)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-8f4c56?style=flat-square)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-4b8bbe?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-6fc79a?style=flat-square)](LICENSE.txt)
@@ -164,12 +164,20 @@ correctly and invents one badly — that is the whole reason for the reference.
 
 **Models.** The assistant picks a model that fits your hardware on first launch.
 
-| Model | Size | RAM needed | Notes |
-|---|---:|:---:|---|
-| `qwen2.5:0.5b` | 400 MB | 2 GB | Fastest, weakest reasoning |
-| `qwen2.5:3b` | 2 GB | 6 GB | Good balance for a laptop |
-| `qwen2.5:7b` | 4.7 GB | 12 GB | Best answers, needs a GPU or 16 GB |
-| `llava:7b` | 4.7 GB | 12 GB | Photographs of tasks (vision) |
+| Model | Download | RAM budget | Photos | Notes |
+|---|---:|:---:|:---:|---|
+| `qwen3.5:27b` | 17.5 GB | 24 GB | yes | Best answers, offered only with enough VRAM |
+| `gemma4:26b` | 18.7 GB | 24 GB | yes | Mixture-of-experts |
+| `qwen3.5:9b` | 6.6 GB | 12 GB | yes | Balanced quality and speed |
+| `gemma4:e4b` | 6.6 GB | 12 GB | yes | Google alternative |
+| `qwen3.5:4b` | 3.3 GB | 8 GB | yes | Default; fits a mid-range laptop |
+| `qwen3.5:2b` | 2.7 GB | 6 GB | yes | Fast on CPU |
+| `qwen2.5:1.5b` | 1.0 GB | 4 GB | no | Very weak machines |
+| `qwen2.5:0.5b` | 0.4 GB | 2.5 GB | no | Smoke test |
+
+Qwen 3.5 and Gemma 4 need a recent Ollama; update it if a download fails with
+an "unknown architecture" error. Their reasoning mode is switched off, so the
+answer is not delayed by a hidden chain of thought.
 
 Models are downloaded from Ollama, not from this project. Settings has a
 **Delete model** button, because otherwise reclaiming the disk space needs a
@@ -256,7 +264,7 @@ check.
 ## Testing
 
 ```bash
-pytest tests/ -q            # 168 unit tests
+pytest tests/ -q            # 185 unit tests
 python tests/sweep_full.py  # 199 end-to-end checks
 ```
 
@@ -264,11 +272,11 @@ The sweep covers parsing, solving, calculus, matrices, formatting, the theorem
 reference, ranking quality, the request guard and intent classification. It
 prints a single `199/199 passed` line, and is run before every release.
 
-**Why 168 and not 170.** The runner reports a total of `170 passed`, while the
-commands above say 168. The difference is `tests/test_doc_counts.py`, whose two
+**Why 185 and not 187.** The runner reports a total of `187 passed`, while the
+commands above say 178. The difference is `tests/test_doc_counts.py`, whose two
 tests check the numbers in this documentation against the real suite. It counts
 the suite with `--deselect tests/test_doc_counts.py`, so it cannot count itself:
-170 collected minus those 2 equals the 168 quoted here. Both numbers are correct
+187 collected minus those 2 equals the 185 quoted here. Both numbers are correct
 and the check fails if either drifts.
 
 ## Project layout

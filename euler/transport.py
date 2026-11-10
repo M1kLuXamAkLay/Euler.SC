@@ -27,6 +27,7 @@ Security notes
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import mimetypes
@@ -72,7 +73,7 @@ def boot_document(document: bytes) -> bytes:
     if theme not in ("light", "dark"):
         theme = "auto"
 
-    def rewrite(match: "re.Match") -> bytes:
+    def rewrite(match: re.Match) -> bytes:
         attributes = match.group(1).decode("utf-8", "replace")
         if language:
             attributes = re.sub(r'\slang="[^"]*"', "", attributes)
@@ -82,7 +83,7 @@ def boot_document(document: bytes) -> bytes:
         attributes = re.sub(r'\sdata-theme="[^"]*"', "", attributes)
         if theme != "auto":
             attributes += f' data-theme="{theme}"'
-        return f"<html{attributes}>".encode("utf-8")
+        return f"<html{attributes}>".encode()
 
     replaced, count = _BOOT_ATTRIBUTES.subn(rewrite, document)
     return replaced if count else document
@@ -134,11 +135,9 @@ class Transport:
         with self._clients_lock:
             targets = list(self._clients)
         for client in targets:
-            try:
+            # A stalled page must not grow memory without bound
+            with contextlib.suppress(queue.Full):
                 client.put_nowait(frame)
-            except queue.Full:
-                # A stalled page must not grow memory without bound
-                pass
 
     def _register(self) -> queue.Queue[str]:
         client: queue.Queue[str] = queue.Queue(maxsize=512)
@@ -373,7 +372,7 @@ class Transport:
             outcome = func(**payload)
         except TypeError as exc:
             return {"ok": False, "error": f"bad arguments: {exc}"}
-        except Exception as exc:                     # noqa: BLE001 -报告给界面
+        except Exception as exc:                     # noqa: BLE001 - reported to the interface
             _log.exception("method %s failed", method)
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

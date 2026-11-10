@@ -8,7 +8,6 @@ def _latex(expression: str) -> str:
 
 
 def test_polynomial_hides_unit_coefficients_and_fixes_signs():
-    x = sp.Symbol("x")
     assert stepwise._polynomial_tex([(sp.Integer(1), "x^{2}"), (sp.Integer(-5), "x"), (sp.Integer(6), "")]) \
         == "x^{2} - 5\\,x + 6"
     assert stepwise._polynomial_tex([(sp.Integer(-1), "x^{2}"), (sp.Integer(0), "x"), (sp.Integer(-1), "")]) \

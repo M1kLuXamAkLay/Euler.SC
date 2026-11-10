@@ -3,14 +3,14 @@
 ## Before a pull request
 
 ```bash
-pytest tests/ -q             # must be 168 passed
+pytest tests/ -q             # must be 185 passed
 python tests/sweep_full.py   # must be 199/199 passed
 node --check app/web/app.js
 ```
 
-The suite prints `170 passed`; the comment above says 168 on purpose. Two of
+The suite prints `187 passed`; the comment above says 185 on purpose. Two of
 those tests are in `tests/test_doc_counts.py`, which verifies these very numbers
-and therefore excludes itself when counting (170 - 2 = 168). If you change the
+and therefore excludes itself when counting (187 - 2 = 185). If you change the
 suite size, update the documented number and let that test tell you whether you
 missed a place.
 

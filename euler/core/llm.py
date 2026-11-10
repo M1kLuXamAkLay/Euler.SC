@@ -5,9 +5,11 @@ installer download, triggered by an explicit user action.
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,13 +17,18 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
 
 from . import download as dl
+from . import hardware
 
 HOST = "http://127.0.0.1:11434"
+THINKING_FAMILIES = ("qwen3.5", "gemma4")
+# Oldest Ollama that can load each family. Below these the registry or the
+# runtime rejects the model (Ollama answers HTTP 412 for gemma4 before 0.20.0).
+MIN_OLLAMA_VERSION = {"qwen3.5": (0, 17, 5), "gemma4": (0, 20, 0)}
 # Enough for a worked solution; far too little for a runaway loop.
 MAX_ANSWER_TOKENS = 900
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -103,10 +110,6 @@ def system_prompt(language: str | None = None) -> str:
     )
 
 
-# Kept for callers that do not pass a language.
-SYSTEM_PROMPT = system_prompt("en")
-
-
 class OllamaError(RuntimeError):
     """Error carrying a message suitable for display."""
 
@@ -130,6 +133,33 @@ def is_running(timeout: float = 1.2) -> bool:
         return True
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         return False
+
+
+def parse_version(text: str) -> tuple[int, ...] | None:
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def installed_version() -> tuple[int, ...] | None:
+    try:
+        return parse_version(_get("/api/version").get("version", ""))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def _too_old(current: tuple[int, ...] | None, required: tuple[int, ...]) -> OllamaError:
+    def text(value: tuple[int, ...] | None) -> str:
+        return ".".join(map(str, value)) if value else "?"
+    return OllamaError(f"ExprError.ollama_too_old:{text(current)}:{text(required)}")
+
+
+def ensure_version(model: str) -> None:
+    required = MIN_OLLAMA_VERSION.get(hardware.family(model))
+    if required is None:
+        return
+    current = installed_version()
+    if current is not None and current < required:
+        raise _too_old(current, required)
 
 
 def is_installed() -> bool:
@@ -244,11 +274,10 @@ def _rollback_partial_install() -> None:
     folder = _user_install_dir()
     uninstaller = folder / "unins000.exe"
     if uninstaller.exists():
-        try:
+        # A broken uninstaller leaves files behind; the rmtree below is the fallback.
+        with contextlib.suppress(OSError, subprocess.SubprocessError, OllamaError):
             _run_tracked([str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
                          timeout=300, honour_cancel=False)
-        except (OSError, subprocess.SubprocessError, OllamaError):
-            pass
     shutil.rmtree(folder, ignore_errors=True)
 
 
@@ -353,6 +382,7 @@ def pull(name: str, on_progress: Callable[[dict], None] | None = None) -> None:
     A cancel stops the stream; Ollama keeps only complete blobs, so the partial
     data is removed by its own cleanup and nothing under the model name is left.
     """
+    ensure_version(name)
     body = json.dumps({"model": name, "stream": True}).encode()
     for attempt in range(PULL_RETRIES + 1):
         _check_cancel()
@@ -363,6 +393,9 @@ def pull(name: str, on_progress: Callable[[dict], None] | None = None) -> None:
             raise
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError,
                 ConnectionError, OSError) as exc:
+            required = MIN_OLLAMA_VERSION.get(hardware.family(name))
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 412 and required:
+                raise _too_old(installed_version(), required) from None
             if attempt == PULL_RETRIES:
                 raise OllamaError(f"ExprError.pull_failed:{exc}") from None
             if _cancel.wait(min(2 ** (attempt + 1), 30)):
@@ -445,6 +478,11 @@ def classify(model: str, system: str, user: str,
         },
     }
 
+    # Only thinking families get the flag: the others reject it with a 400,
+    # and reasoning here would eat the 160-token budget anyway.
+    if is_thinking_model(model):
+        payload["think"] = False
+
     request = urllib.request.Request(
         f"{HOST}/api/chat",
         data=json.dumps(payload).encode(),
@@ -497,8 +535,7 @@ def chat_stream(model: str, messages: list[dict], temperature: float = 0.3,
         "options": {
             "temperature": temperature,
             "num_ctx": 4096,
-            # A loop used to stream forever. This cap bounds it in time and
-            # tokens; a normal answer needs a fraction of it.
+            # A loop would stream forever; this bounds it in time and tokens.
             "num_predict": MAX_ANSWER_TOKENS,
             # Repeating a line is the usual failure; stop before it starts.
             "stop": ["\n\n\n", "```\n\n```"],
@@ -508,6 +545,11 @@ def chat_stream(model: str, messages: list[dict], temperature: float = 0.3,
             "repeat_last_n": 128,
         },
     }
+
+    # Reasoning is not shown in the answer pane, so it would only spend the
+    # token budget and the user's time. Non-thinking families reject the flag.
+    if is_thinking_model(model):
+        payload["think"] = False
 
     req = urllib.request.Request(
         f"{HOST}/api/chat", data=json.dumps(payload).encode(),
@@ -539,10 +581,13 @@ def chat_stream(model: str, messages: list[dict], temperature: float = 0.3,
         raise OllamaError(f"ExprError.connection_lost:{exc.reason}") from None
 
 
-def supports_vision(model: str) -> bool:
-    """Models that accept images. The list is deliberately narrow: others silently ignore them."""
-    name = model.lower()
-    return any(tag in name for tag in ("llava", "moondream", "qwen2-vl", "qwen2.5vl", "minicpm-v", "bakllava"))
+def is_thinking_model(model: str) -> bool:
+    """Families that emit a reasoning block before the answer.
+
+    ``think: false`` is only sent to these: a model without the capability
+    rejects the request with a 400.
+    """
+    return hardware.family(model) in THINKING_FAMILIES
 
 
 def status() -> dict:
@@ -569,10 +614,6 @@ def mark_started_by_app() -> None:
     _STARTED_BY_US = True
 
 
-def started_by_app() -> bool:
-    return _STARTED_BY_US
-
-
 def _pids_on_port(port: int = 11434) -> list[int]:
     """Process ids listening on the Ollama port."""
     found: list[int] = []
@@ -586,12 +627,12 @@ def _pids_on_port(port: int = 11434) -> list[int]:
                 creationflags=CREATE_NO_WINDOW).stdout
             for line in output.splitlines():
                 parts = line.split()
-                if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
-                    if parts[1].endswith(f":{port}"):
-                        try:
-                            found.append(int(parts[4]))
-                        except ValueError:
-                            pass
+                listening = (len(parts) >= 5 and parts[0].upper() == "TCP"
+                             and parts[3].upper() == "LISTENING"
+                             and parts[1].endswith(f":{port}"))
+                if listening:
+                    with contextlib.suppress(ValueError):
+                        found.append(int(parts[4]))
         except (OSError, subprocess.SubprocessError):
             pass
         return found
@@ -606,10 +647,8 @@ def _pids_on_port(port: int = 11434) -> list[int]:
 
         if command[0] == "lsof":
             for line in result.stdout.split():
-                try:
+                with contextlib.suppress(ValueError):
                     found.append(int(line))
-                except ValueError:
-                    pass
         else:
             import re as _re
             for pid in _re.findall(r"pid=(\d+)", result.stdout):
@@ -634,12 +673,10 @@ def stop_server(wait_seconds: float = 6.0) -> dict:
     if not is_running(timeout=1.0):
         return {"stopped": True, "reason": "already_down"}
 
-    # Ask politely first: this unloads the model and closes the socket cleanly
-    try:
+    # Ask politely first: this unloads the model and closes the socket cleanly.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(["ollama", "stop"], capture_output=True, timeout=10,
                        creationflags=CREATE_NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        pass
 
     time.sleep(0.4)
 

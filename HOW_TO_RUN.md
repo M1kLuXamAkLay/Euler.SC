@@ -133,13 +133,13 @@ and the calculator is unaffected; only free-form descriptions stop resolving.
 ## Testing
 
 ```bash
-pytest tests/ -q             # 168 unit tests, about fifteen seconds
+pytest tests/ -q             # 185 unit tests, about fifteen seconds
 python tests/sweep_full.py   # 199 end-to-end checks
 ```
 
 The sweep is the release gate. Run both before packaging.
 
-The runner prints a total of `170 passed`; the 168 above is the same suite
+The runner prints a total of `187 passed`; the 185 above is the same suite
 without the two tests in `tests/test_doc_counts.py`, which check these numbers
 and exclude themselves so they can be stable. See
 [README](README.md#testing) for the full explanation.

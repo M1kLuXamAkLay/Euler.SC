@@ -15,9 +15,8 @@ import re
 import sympy as sp
 from sympy.polys.polyerrors import GeneratorsNeeded
 
-from .parser import ExprError, detect_variable, parse
-
-_RELATIONS = ("<=", ">=", "<", ">", "=")
+from .analysis import latex_value
+from .parser import ExprError, detect_variable, parse, split_relation
 
 _SUBSCRIPT = str.maketrans("0123456789", "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089")
 
@@ -77,17 +76,9 @@ def err(key: str) -> dict:
     return {"ok": False, "text": "", "latex": None, "error": key}
 
 
-def _split_relation(text: str) -> tuple[str, str, str] | None:
-    for op in sorted(_RELATIONS, key=len, reverse=True):
-        if op in text:
-            left, right = text.split(op, 1)
-            return left.strip(), op, right.strip()
-    return None
-
-
 def _relation(left: sp.Expr, op: str, right: sp.Expr):
     builders = {
-        "<": sp.Lt, ">": sp.Gt, "<=": sp.Le, ">=": sp.Ge, "=": sp.Eq,
+        "<": sp.Lt, ">": sp.Gt, "<=": sp.Le, ">=": sp.Ge, "=": sp.Eq, "!=": sp.Ne,
     }
     return builders[op](left, right, evaluate=False)
 
@@ -139,18 +130,6 @@ def pretty_number(value, digits: int = 6) -> str:
         return clean(str(value))
 
 
-def _tex(value) -> str:
-    """LaTeX for a value, with infinities and natural log written properly."""
-    if value is sp.oo:
-        return "+\\infty"
-    if value is -sp.oo:
-        return "-\\infty"
-    if value is sp.zoo or value is sp.nan:
-        return "\\text{—}"
-    from .analysis import ln_latex
-    return ln_latex(value)
-
-
 def _periodic_latex(solution, var_name: str) -> str:
     """Typeset an arithmetic progression as ``a + Tk, k in Z``.
 
@@ -170,9 +149,9 @@ def _periodic_latex(solution, var_name: str) -> str:
             return str(solution)
 
     if period == 0:
-        return f"{var_name} = {_tex(offset)}"
+        return f"{var_name} = {latex_value(offset)}"
 
-    period_text = _tex(period)
+    period_text = latex_value(period)
     # "1*k" and "-1*k" are noise
     if period_text == "1":
         base = "k"
@@ -186,13 +165,13 @@ def _periodic_latex(solution, var_name: str) -> str:
     if offset == 0:
         return f"{var_name} = {base},\\; k \\in \\mathbb{{Z}}"
     if offset.is_negative:
-        return f"{var_name} = {base} - {_tex(-offset)},\\; k \\in \\mathbb{{Z}}"
-    return f"{var_name} = {_tex(offset)} + {base},\\; k \\in \\mathbb{{Z}}"
+        return f"{var_name} = {base} - {latex_value(-offset)},\\; k \\in \\mathbb{{Z}}"
+    return f"{var_name} = {latex_value(offset)} + {base},\\; k \\in \\mathbb{{Z}}"
 
 
 def _imaginary_tex(magnitude) -> str:
     """``b\\,i`` with an upright i, and no coefficient for a unit magnitude."""
-    body = _tex(magnitude)
+    body = latex_value(magnitude)
     if body in ("1", "+1"):
         return "\\mathrm{i}"
     return f"{body}\\,\\mathrm{{i}}"
@@ -224,14 +203,14 @@ def _complex_pairs_latex(values, var_name: str) -> list[str]:
         seen.add(value)
         seen.add(pair)
 
-        real_text = f"{_tex(sp.Abs(real))} " if real != 0 else ""
+        real_text = f"{latex_value(sp.Abs(real))} " if real != 0 else ""
         imaginary_text = _imaginary_tex(sp.Abs(imaginary))
         parts.append(f"{var_name} = \\pm {real_text}\\pm {imaginary_text}")
 
     return parts if len(parts) * 2 == len(complex_values) else []
 
 
-def _format_set_latex(solution, var_name: str) -> str:
+def format_set_latex(solution, var_name: str) -> str:
     """The same set as :func:`_format_set`, typeset."""
     if solution is sp.S.Reals:
         return f"{var_name} \\in \\mathbb{{R}}"
@@ -245,13 +224,13 @@ def _format_set_latex(solution, var_name: str) -> str:
         if not values:
             return "\\varnothing"
         if len(values) == 1:
-            return f"{var_name} = {_tex(values[0])}"
+            return f"{var_name} = {latex_value(values[0])}"
 
         if len(values) == 2:
             first, second = values
             # Real pair mirrored about zero: x = ±a
             if second == -first and getattr(first, "is_real", False):
-                return f"{var_name} = \\pm {_tex(sp.Abs(first))}"
+                return f"{var_name} = \\pm {latex_value(sp.Abs(first))}"
 
             # Complex conjugate pair: x = a ± bi, which is how the answer is
             # written by hand. Listing "1 - 2i" and "1 + 2i" separately is
@@ -264,29 +243,28 @@ def _format_set_latex(solution, var_name: str) -> str:
                 # sign twice.
                 real = sp.re(first)
                 imaginary = sp.Abs(sp.im(first))
-                prefix = f"{_tex(real)} " if real != 0 else ""
+                prefix = f"{latex_value(real)} " if real != 0 else ""
                 return f"{var_name} = {prefix}\\pm {_imaginary_tex(imaginary)}"
         # General complex set: group conjugates into "±a ± bi" lines.
         lines = _complex_pairs_latex(values, var_name)
         if lines:
             return " \\;\\text{or}\\; ".join(lines)
 
-        joined = ",\\quad ".join(
-            f"{var_name}_{{{i}}} = {_tex(v)}" for i, v in enumerate(values[:8], 1))
-        return joined
+        return ",\\quad ".join(
+            f"{var_name}_{{{i}}} = {latex_value(v)}" for i, v in enumerate(values[:8], 1))
 
     if isinstance(solution, sp.Interval):
-        left = "-\\infty" if solution.left is -sp.oo else _tex(solution.left)
-        right = "+\\infty" if solution.right is sp.oo else _tex(solution.right)
+        left = "-\\infty" if solution.left is -sp.oo else latex_value(solution.left)
+        right = "+\\infty" if solution.right is sp.oo else latex_value(solution.right)
         lb = "(" if solution.left_open else "["
         rb = ")" if solution.right_open else "]"
         return f"{var_name} \\in \\left{lb}{left};\\; {right}\\right{rb}"
 
     if isinstance(solution, sp.Union):
         if all(isinstance(part, sp.Interval) for part in solution.args):
-            bodies = [_format_set_latex(part, var_name).split(" \\in ", 1)[-1] for part in solution.args]
+            bodies = [format_set_latex(part, var_name).split(" \\in ", 1)[-1] for part in solution.args]
             return f"{var_name} \\in " + " \\cup ".join(bodies)
-        parts = [_format_set_latex(part, var_name) for part in solution.args]
+        parts = [format_set_latex(part, var_name) for part in solution.args]
         # A union of arithmetic progressions reads better one per line than
         # as a single \cup chain a metre long
         if all("k \\in \\mathbb{Z}" in part for part in parts):
@@ -295,7 +273,7 @@ def _format_set_latex(solution, var_name: str) -> str:
 
     if isinstance(solution, sp.Intersection):
         finite = next((a for a in solution.args if isinstance(a, sp.FiniteSet)), None)
-        return _format_set_latex(finite, var_name) if finite is not None else sp.latex(solution)
+        return format_set_latex(finite, var_name) if finite is not None else sp.latex(solution)
 
     if isinstance(solution, sp.ImageSet):
         return _periodic_latex(solution, var_name)
@@ -395,7 +373,7 @@ def evaluate(text: str, matrices: dict | None = None) -> dict:
             return ok(_format_matrix(result))
 
         # Matrix helpers such as rank() return a plain Python int
-        if isinstance(result, bool) or isinstance(result, int):
+        if isinstance(result, (bool, int)):
             return ok_value(sp.Integer(int(result)))
         if isinstance(result, float):
             return ok_value(sp.Rational(str(result)).limit_denominator(10 ** 9))
@@ -405,7 +383,7 @@ def evaluate(text: str, matrices: dict | None = None) -> dict:
         # letting the attribute access below raise AttributeError.
         if isinstance(result, (tuple, list, set, frozenset)):
             raise ExprError("ExprError.comma_outside_call")
-        if isinstance(result, sp.logic.boolalg.Boolean) or isinstance(result, sp.Rel):
+        if isinstance(result, (sp.logic.boolalg.Boolean, sp.Rel)):
             return ok(sp.latex(result) and str(result).replace("**", "^"))
         if not isinstance(result, sp.Basic):
             raise ExprError("ExprError.generic")
@@ -481,7 +459,7 @@ def _trig_substitution_solution(expression, var_name: str):
 
 def solve_equation(text: str, matrices: dict | None = None) -> dict:
     """Solve an equation or inequality with respect to its primary variable."""
-    parts = _split_relation(text)
+    parts = split_relation(text)
     if parts is None:
         return evaluate(text, matrices)
 
@@ -503,7 +481,7 @@ def solve_equation(text: str, matrices: dict | None = None) -> dict:
 
         if op in ("<", ">", "<=", ">="):
             solution = sp.solve_univariate_inequality(relation, var, relational=False)
-            return ok(_format_set(solution, var_name), _format_set_latex(solution, var_name))
+            return ok(_format_set(solution, var_name), format_set_latex(solution, var_name))
 
         try:
             solution = sp.solveset(relation, var, domain=sp.S.Reals)
@@ -540,7 +518,7 @@ def solve_equation(text: str, matrices: dict | None = None) -> dict:
             return err("ExprError.no_solution")
 
         return ok(_format_set(solution, var_name),
-                  _format_set_latex(solution, var_name),
+                  format_set_latex(solution, var_name),
                   note=note)
     except ZeroDivisionError:
         return err("ExprError.div_zero")
@@ -573,7 +551,7 @@ def _parse_system(equations: list[str], symbols: tuple, matrices):
     primary = symbols[0].name if symbols else "x"
 
     for equation in equations:
-        parts = _split_relation(equation)
+        parts = split_relation(equation)
         if parts is None:
             return [], [], "ExprError.need_relation"
         left, op, right = parts
@@ -628,7 +606,7 @@ def _format_solutions(solutions: list[dict], symbols: tuple) -> tuple[str, str]:
             if value is None:
                 continue
             plain_parts.append(f"{symbol.name} = {pretty_number(value)}")
-            tex_parts.append(f"{symbol.name} = {_tex(value)}")
+            tex_parts.append(f"{symbol.name} = {latex_value(value)}")
         if plain_parts:
             plain_lines.append(";  ".join(plain_parts))
             tex_lines.append(",\\quad ".join(tex_parts))
@@ -679,7 +657,7 @@ def solve_system(equations: list[str], matrices: dict | None = None) -> dict:
         rows: list[list] = []
         for expression in expressions:
             row = [sp.simplify(expression.coeff(symbol)) for symbol in symbols]
-            row.append(sp.simplify(-expression.subs({symbol: 0 for symbol in symbols})))
+            row.append(sp.simplify(-expression.subs(dict.fromkeys(symbols, 0))))
             rows.append(row)
 
         try:
@@ -699,7 +677,7 @@ def solve_system(equations: list[str], matrices: dict | None = None) -> dict:
             values = [sp.simplify(reduced[index, -1]) for index in range(unknown_count)]
             plain = ";  ".join(f"{symbol.name} = {pretty_number(value)}"
                                for symbol, value in zip(symbols, values))
-            tex = ",\\quad ".join(f"{symbol.name} = {_tex(value)}"
+            tex = ",\\quad ".join(f"{symbol.name} = {latex_value(value)}"
                                    for symbol, value in zip(symbols, values))
             return ok(plain, tex)
 
@@ -716,7 +694,7 @@ def solve_system(equations: list[str], matrices: dict | None = None) -> dict:
                 if coefficient != 0:
                     expression -= coefficient * symbols[column]
             plain_parts.append(f"{symbol.name} = {pretty_number(expression)}")
-            tex_parts.append(f"{symbol.name} = {_tex(expression)}")
+            tex_parts.append(f"{symbol.name} = {latex_value(expression)}")
 
         for column in free_columns:
             name = symbols[column].name
@@ -791,5 +769,5 @@ def analyze_function(text: str) -> dict:
 
 __all__ = [
     "evaluate", "solve_equation", "solve_system", "analyze_function",
-    "pretty_number", "clean", "ok", "err", "_format_set", "_split_relation",
+    "pretty_number", "clean", "ok", "err", "format_set_latex", "SYSTEM_VARIABLES",
 ]

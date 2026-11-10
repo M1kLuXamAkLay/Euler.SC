@@ -8,27 +8,14 @@ Storage lives in the settings file so matrices survive a restart.
 """
 from __future__ import annotations
 
-import sympy as sp
-
 from .parser import ExprError
 from . import matrix as matrix_module
 from .matrix import MAX_SIZE
 
 LETTERS = ("A", "B", "C", "D", "E", "F", "G", "H")
 
-# Functions that take a matrix and return a number or another matrix.
-MATRIX_FUNCTIONS = {
-    "det": lambda m: sp.Matrix(m).det(),
-    "rank": lambda m: sp.Matrix(m).rank(),
-    "inv": lambda m: sp.Matrix(m).inv(),
-    "transpose": lambda m: sp.Matrix(m).T,
-    "trace": lambda m: sp.Matrix(m).trace(),
-    "eigenvals": lambda m: sp.srepr(sp.Matrix(m).eigenvals()),
-}
-
-
 class Registry:
-    """Matrices stored by letter, shared between the bridge and the parser."""
+    """Matrices stored by letter; the bridge passes their grids to the parser."""
 
     def __init__(self) -> None:
         self._items: dict[str, list[list[str]]] = {}
@@ -105,8 +92,8 @@ class Registry:
         for row in grid:
             if len(row) != width:
                 raise ExprError("ExprError.ragged_matrix")
-        if len(grid) > matrix_module.MAX_SIZE or width > matrix_module.MAX_SIZE:
-            raise ExprError(f"ExprError.matrix_too_big:{matrix_module.MAX_SIZE}")
+        if len(grid) > MAX_SIZE or width > MAX_SIZE:
+            raise ExprError(f"ExprError.matrix_too_big:{MAX_SIZE}")
 
         # Validate every cell now, so errors surface at save time not at use time
         matrix_module.to_matrix(grid)
@@ -123,17 +110,6 @@ class Registry:
             return True
         return False
 
-    def as_locals(self) -> dict:
-        """Mapping for ``parse()`` so letters resolve to matrices."""
-        result: dict = {}
-        for name, grid in self._items.items():
-            try:
-                result[name] = matrix_module.to_matrix(grid)
-            except ExprError:
-                # A corrupt grid must not break every other expression
-                continue
-        return result
-
     def describe(self) -> list[dict]:
         """Summary for the carousel in the interface."""
         out = []
@@ -148,5 +124,4 @@ class Registry:
         return out
 
 
-# Single shared instance: the bridge and the parser both read from it.
 registry = Registry()

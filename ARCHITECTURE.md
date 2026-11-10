@@ -1,6 +1,6 @@
 # Σuler.SC — Architecture Documentation
 
-**Version:** 5.2.3  
+**Version:** 5.2.4  
 **Last Updated:** 11.04.2026
 
 ## Overview
@@ -416,16 +416,16 @@ python run.py
 Two layers, both run before packaging:
 
 ```bash
-pytest tests/ -q              # 168 unit tests, ~14 s
+pytest tests/ -q              # 185 unit tests, ~14 s
 python tests/sweep_full.py    # 199 functional checks, release gate
 ```
 
-**The reported total is 170, not 168, and that is deliberate.**
+**The reported total is 187, not 185, and that is deliberate.**
 `tests/test_doc_counts.py` holds two tests whose job is to keep the numbers in
 this documentation equal to the real ones. It counts the suite in a subprocess
 with `--deselect tests/test_doc_counts.py`, because a file that counted itself
 would never stabilise: adding a test to it would change both sides of the
-equation at once. 170 collected minus those 2 equals the 168 quoted in the
+equation at once. 187 collected minus those 2 equals the 185 quoted in the
 documents. `test_documented_unit_count_is_current` fails with both numbers in
 its message if the two ever disagree, so the convention cannot quietly rot.
 

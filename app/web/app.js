@@ -1,18 +1,16 @@
 /* ==========================================================================
-   Σuler.SC 2.1 — логика интерфейса.
+   Interface logic.
 
-   ГЛАВНОЕ ПРО МОСТ (почему раньше было "api[method] is not a function"):
-   pywebview создаёт window.pywebview.api НЕ сразу и наполняет его методами
-   асинхронно через _createApi(). Мой прошлый код резолвил промис на объекте
-   api, который в тот момент был ещё пустым {}. Теперь ждём не объект,
-   а конкретный метод — и проверяем его наличие перед каждым вызовом.
+   The bridge is asynchronous. pywebview creates ``window.pywebview.api`` and
+   fills it in through ``_createApi()`` a moment later, so a promise resolved on
+   the object itself can find it empty. Every call waits for the method, not for
+   the object, and checks that the method exists before using it.
 
-   ГЛАВНОЕ ПРО ВВОД ФОРМУЛ:
-   В прошлой версии клавиши имели data-insert="\\sin(" — двойной слеш.
-   HTML не обрабатывает JS-экранирование, MathLive получал два символа "\"
-   и показывал их на экране. Теперь весь LaTeX живёт только в этом файле,
-   где '\sin(' — один слеш. Плейсхолдер (#?) превращается в слот,
-   каретка встаёт внутрь скобок, "#" на экране не появляется.
+   Formula input. LaTeX lives only in this file, where ``\sin(`` is one
+   backslash. An HTML attribute cannot carry JS escaping: ``data-insert="\\sin("``
+   reached MathLive as two characters and rendered them. The ``#?`` placeholder
+   becomes the caret slot, so the caret lands inside the brackets and the ``#``
+   never appears on screen.
    ========================================================================== */
 'use strict';
 
@@ -28,7 +26,6 @@ const state = {
   history: [],
   pendingImage: null,
   fnMarked: 0,
-  series: [],
   theme: 'auto',
   lastSolution: null,
   // ALT history, kept PER SURFACE. A single set of fields meant that pressing
@@ -164,8 +161,8 @@ function resolveAns(expression) {
 /**
  * Plural form of a counted noun.
  *
- * Russian, Ukrainian and Belarusian need three forms: 1 модель, 2 модели,
- * 5 моделей. English and Romance languages need two. The count decides.
+ * Slavic languages need three forms (one, few, many); English and the Romance
+ * languages need two. The count decides.
  */
 function pluralCount(count, key) {
   const n = Math.abs(Number(count) || 0);
@@ -526,7 +523,7 @@ function setField(selector, latex) {
   }
 }
 
-/** Проверка field not empty with error message, not silent ignore. */
+/** Reject an empty field with a visible message instead of ignoring the click. */
 function requireField(selector, message) {
   const value = readField(selector);
   if (!value || !value.trim()) {
@@ -572,14 +569,9 @@ function setLcd(text, { error = false, ms = null, latex = null } = {}) {
   }
 }
 
-function setLcdLatex(latex) {
-  setLcd('', { latex });
-}
-
 /* ============================================================ KEYBOARD
-   Keys are reused во ВСЕХ вкладках: кнопка «открыть клавиатуру»
-   вставляет тот же компонент под нужное поле. Раньше во вкладках был
-   обычный input, и формулы приходилось печатать вручную. */
+   One keypad component is shared by every tab and mounted under whichever field
+   is active, so a key writes into the field the user is looking at. */
 
 /**
  * Direct and inverse functions for the SHIFT key.
@@ -699,7 +691,6 @@ function layoutFor(hostSelector) {
   return BASE_LAYOUT;
 }
 
-let LAYOUT = BASE_LAYOUT;
 
 /** Build keyboard in container. targetSelector — field to write to. */
 function buildKeyboard(hostSelector, targetSelector, layout = null) {
@@ -768,9 +759,7 @@ function clearCalculatorInput(targetSelector) {
     // landed a moment later and repainted the answer AC had just removed.
     state.matrixEvalSeq += 1;
     const out = $('#mx-out');
-    const form = $('#mx-form');
     if (out) { out.innerHTML = ''; out.textContent = ''; out.className = 'lcd-out'; }
-    if (form) form.textContent = '';
     // Clear this surface's ALT record too, or ALT after AC would cycle a value
     // that is no longer on screen.
     const ans = state.answers.matrix;
@@ -893,11 +882,6 @@ async function cycleAnswerForm(surface = 'calc') {
   }
 }
 
-/** Localised name of an answer form ("exact", "decimal" ...), or empty. */
-function formLabel(key) {
-  return key ? t(`form.${key}`) : '';
-}
-
 /** Paint an answer into the surface that owns it. */
 function paintAnswer(surface, latex, key) {
   if (surface === 'matrix') {
@@ -912,14 +896,10 @@ function paintAnswer(surface, latex, key) {
         out.textContent = String(latex);
       }
     }
-    const form = $('#mx-form');
-    if (form) form.textContent = formLabel(key);
     return;
   }
 
   setLcd('', { latex: latex || '' });
-  const chip = $('#form-chip');
-  if (chip) chip.textContent = formLabel(key);
 }
 
 /** Error for a surface, in the element that surface shows results in. */
@@ -945,12 +925,6 @@ function validateInput(value, context) {
   }
 
   return { ok: true };
-}
-
-function showGuide(selector, key) {
-  const el = $(selector);
-  if (!el) return;
-  el.innerHTML = `<p style="color:var(--note)">${escapeHtml(t(key))}</p>`;
 }
 
 /* ============================================================ CALCULATOR */
@@ -980,8 +954,6 @@ async function evaluateCalculator() {
       setLcd(res.result, { ms: res.elapsed_ms, latex: res.latex });
       state.history.unshift({ expr, result: res.result });
       if (state.history.length > 40) state.history.pop();
-      const chip = $('#form-chip');
-      if (chip) chip.textContent = formLabel(ans.form);
     } else {
       setLcd(message(res.error) || t('common.error'), { error: true });
     }
@@ -1145,7 +1117,7 @@ function renderFnList(values, marked = 0) {
   const items = values.length ? values : [''];
   list.innerHTML = '';
   items.forEach((value, index) => {
-    const { row, field } = buildFnRow(value, index);
+    const { row } = buildFnRow(value, index);
     list.appendChild(row);
     setField(`#${row.dataset.field}`, value);
   });
@@ -1179,14 +1151,6 @@ function removeFunction(row) {
   renderFnList(values, marked);
 }
 
-function formulaMarkup(latex) {
-  try {
-    return window.MathLive.convertLatexToMarkup(latex, { displayMode: false });
-  } catch {
-    return escapeHtml(latex);
-  }
-}
-
 function renderLegend() {
   const fns = activeFunctions();
   for (const legend of $$('.fn-legend')) {
@@ -1200,7 +1164,7 @@ function renderLegend() {
       const formula = document.createElement('span');
       formula.className = 'fn-tex';
       formula.style.color = fn.color;
-      formula.innerHTML = formulaMarkup(`y_{${fn.index + 1}} = ${plainToLatex(fn.expr)}`);
+      formula.innerHTML = renderInlineMath(`y_{${fn.index + 1}} = ${plainToLatex(fn.expr)}`);
       chip.append(stripe, formula);
       legend.appendChild(chip);
     }
@@ -1287,8 +1251,13 @@ let fetchTimer = 0;
 async function fetchSeries(fns, view) {
   const key = fns.map((fn) => fn.expr).join('\u0001');
   const want = sampleWindow(view);
+  const wantWidth = want.xMax - want.xMin;
+  // A cache wider than the window it would be replaced by spreads the same
+  // points over too much range, so the curve has no samples on screen after a
+  // zoom back in. Reuse only when it is at most twice as wide.
   if (coveredRange && coveredRange.key === key
-      && coveredRange.xMin <= view.xMin && coveredRange.xMax >= view.xMax) {
+      && coveredRange.xMin <= view.xMin && coveredRange.xMax >= view.xMax
+      && coveredRange.xMax - coveredRange.xMin <= 2 * wantWidth) {
     return true;
   }
 
@@ -1497,7 +1466,8 @@ function renderGraph(canvas, ctx, detailed = false) {
   // ---- labels
   const font = getComputedStyle(document.body).fontFamily;
   ctx.font = `12px ${font}`;
-  ctx.fillStyle = '#2e1c20';
+  // Tick numbers use the toolbar accent, like the tool labels around the plot.
+  ctx.fillStyle = '#8f4c56';
 
   const decimals = Math.max(0, -Math.floor(Math.log10(stepX)));
   ctx.textAlign = 'center';
@@ -1547,7 +1517,7 @@ function renderGraph(canvas, ctx, detailed = false) {
 
   // Axis names, pinned to the canvas edges so they never scroll away
   ctx.font = `italic 14px ${font}`;
-  ctx.fillStyle = '#6d4f56';
+  ctx.fillStyle = '#8f4c56';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
   ctx.fillText('x', w - 6, axisY - 6);
@@ -1967,18 +1937,6 @@ function paintDrawing() {
   ctx.restore();
 }
 
-/** Screen-space stroke width for a stroke at the current zoom. */
-function strokeWidthNow(stroke, map) {
-  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
-  return Math.max(0.6, stroke.widthPx * ratio);
-}
-
-/** Screen-space font size for a label at the current zoom. */
-function strokeFontNow(stroke, map) {
-  const ratio = map && stroke.scale0 ? map.pxPerUnit / stroke.scale0 : 1;
-  return Math.max(4, stroke.fontPx * ratio);
-}
-
 /** Pixel position of a world point. */
 function toScreen(map, p) {
   return { x: map.toX(p.x), y: map.toY(p.y) };
@@ -2005,9 +1963,18 @@ function paintStroke(ctx, stroke, map) {
     // Text is filled, not stroked: ctx.stroke() would outline the glyphs.
     const size = strokeFontNow(stroke, map);
     const at = toScreen(map, pts[0]);
+    const M = DrawGeom.matrixOf(stroke);
+    ctx.save();
     ctx.font = `${size}px ${getComputedStyle(document.body).fontFamily}`;
     ctx.textBaseline = 'top';
-    ctx.fillText(stroke.text || '', at.x, at.y);
+    if (M[0] === 1 && M[1] === 0 && M[2] === 0 && M[3] === 1) {
+      ctx.fillText(stroke.text || '', at.x, at.y);
+    } else {
+      // The linear part acts in world units, so it is conjugated by the y flip.
+      ctx.transform(M[0], -M[1], -M[2], M[3], at.x, at.y);
+      ctx.fillText(stroke.text || '', 0, 0);
+    }
+    ctx.restore();
     return;
   }
 
@@ -2076,8 +2043,7 @@ function hitStroke(world, map) {
   const reach = SELECT_PX / map.pxPerUnit;
   for (let i = drawing.strokes.length - 1; i >= 0; i--) {
     const stroke = drawing.strokes[i];
-    const tb = textWorldBox(stroke, map);
-    const d = DrawGeom.strokeDistance(stroke, world, tb);
+    const d = DrawGeom.strokeDistance(stroke, world);
     const reachStroke = reach + strokeWidthNow(stroke, map) / (2 * map.pxPerUnit);
     if (d <= reachStroke) return i;
   }
@@ -2085,18 +2051,17 @@ function hitStroke(world, map) {
 }
 
 /** A label's box in world units, from its measured screen size. */
-function textWorldBox(stroke, map) {
-  if (stroke.tool !== 'text') return null;
-  const size = strokeFontNow(stroke, map);
+/** Measured label size in world units at the given screen font size. */
+function textSizeWorld(text, sizePx, map) {
   const ctx = drawing.ctx;
-  let w = size * (stroke.text || '').length * 0.55;
+  let w = sizePx * text.length * 0.55;
   if (ctx) {
     ctx.save();
-    ctx.font = `${size}px ${getComputedStyle(document.body).fontFamily}`;
-    w = ctx.measureText(stroke.text || '').width;
+    ctx.font = `${sizePx}px ${getComputedStyle(document.body).fontFamily}`;
+    w = ctx.measureText(text).width;
     ctx.restore();
   }
-  return { w: w / map.pxPerUnit, h: size / map.pxPerUnit };
+  return { w: w / map.pxPerUnit, h: sizePx / map.pxPerUnit };
 }
 
 /** Selected stroke, if it still exists. */
@@ -2147,16 +2112,22 @@ function paintSelection(ctx, map) {
 
 /** Screen box of the selected stroke, padded so handles sit outside the ink. */
 function selectionBox(stroke, map) {
-  const b = DrawGeom.bounds(stroke, 0);
-  if (!b) return null;
-  const tb = textWorldBox(stroke, map);
-  const maxX = tb ? Math.max(b.maxX, b.minX + tb.w) : b.maxX;
-  const maxY = tb ? Math.max(b.maxY, b.minY + tb.h) : b.maxY;
+  // A label is a quad once rotated or scaled: its frame is the box of its four
+  // corners in screen space. Everything else uses the bounds of its points.
+  let worldPts;
+  if (stroke.tool === 'text' && stroke.w) {
+    worldPts = DrawGeom.textCorners(stroke);
+  } else {
+    const b = DrawGeom.bounds(stroke, 0);
+    if (!b) return null;
+    worldPts = [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.maxY }];
+  }
+  if (!worldPts || !worldPts.length) return null;
+  const screen = worldPts.map((p) => toScreen(map, p));
   const pad = 6;
-  const p0 = toScreen(map, { x: b.minX, y: b.minY });
-  const p1 = toScreen(map, { x: maxX, y: maxY });
-  let x0 = Math.min(p0.x, p1.x) - pad, y0 = Math.min(p0.y, p1.y) - pad;
-  let x1 = Math.max(p0.x, p1.x) + pad, y1 = Math.max(p0.y, p1.y) + pad;
+  const xs = screen.map((p) => p.x), ys = screen.map((p) => p.y);
+  let x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
+  let y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
   // A horizontal or vertical stroke has no extent across its line; pad it to a
   // minimum size so the frame and its handles stay separate and grabbable.
   const MIN = 24;
@@ -2219,8 +2190,7 @@ function eraseAt(world, radiusWorld, map) {
 
   for (const raw of drawing.strokes) {
     const stroke = raw.m ? DrawGeom.baked(raw) : raw;
-    const tb = textWorldBox(stroke, map);
-    const distance = DrawGeom.strokeDistance(stroke, world, tb);
+    const distance = DrawGeom.strokeDistance(stroke, world);
     const reach = radiusWorld + strokeWidthNow(stroke, map) / (2 * map.pxPerUnit);
 
     if (distance > reach) { kept.push(stroke); continue; }
@@ -2297,6 +2267,22 @@ function setToolButtons() {
     b.setAttribute('aria-pressed', String(Number(b.dataset.width) === drawing.width)));
   const dash = $('#btn-draw-dash');
   if (dash) dash.setAttribute('aria-pressed', String(!!drawing.dashed));
+  renderDrawMode();
+}
+
+/** Footer line naming the active mode: tool, dashes, and the right-button tool. */
+function renderDrawMode() {
+  const el = $('#draw-mode');
+  if (!el) return;
+  const short = (tool) => t(`draw.tool.${tool}`).replace(/\s*·.*$/, '').replace(/\s*\([^)]*\)\s*$/, '');
+  const tool = drawing.tool;
+  if (!tool || tool === 'none') { el.textContent = ''; el.classList.remove('is-on'); return; }
+  const dash = drawing.dashed && ['pen', 'line', 'arrow', 'rect', 'circle'].includes(tool)
+    ? ` · ${t('draw.tool.dash').replace(/\s*\([^)]*\)\s*$/, '')}` : '';
+  const right = drawing.right && drawing.right !== tool
+    ? ` · ${t('draw.mode.right')}: ${short(drawing.right)}` : '';
+  el.textContent = `${t('draw.mode.label')}: ${short(tool)}${dash}${right}`;
+  el.classList.add('is-on');
 }
 
 function sizeDrawLayer() {
@@ -2349,6 +2335,8 @@ function beginTextInput(screen, world, map) {
       tool: 'text', color: drawing.color, widthPx: drawing.width,
       fontPx: sizePx, scale0: map.pxPerUnit,
       points: [world], text,
+      // Size in world units at commit, so the frame and hit test match the glyphs.
+      ...textSizeWorld(text, sizePx, map),
     });
     paintDrawing();
   };
@@ -2364,11 +2352,6 @@ function beginTextInput(screen, world, map) {
     if (event.key === 'Escape') { event.preventDefault(); abandon(); }
   });
   input.addEventListener('blur', commit);
-}
-
-/** Textual size of a label, derived from the chosen stroke width. */
-function textFontSize(width) {
-  return Math.max(18, Math.round(width * 6));
 }
 
 /**
@@ -2801,7 +2784,6 @@ if (graphCanvas && typeof ResizeObserver !== 'undefined') {
   }).observe(graphCanvas.parentElement || graphCanvas);
 }
 
-let drag = null;
 if (graphCanvas) {
   /*
    * Pan and zoom.
@@ -2890,9 +2872,8 @@ if (graphCanvas) {
 }
 
 /* ============================================================ MATRICES
-   Input into ready grid ячеек, как в шаблоне. No "1 2; 3 4" notation.
-   Каждая ячейка проверяется на корректность при вводе.
-   Результат можно применить к A и продолжить цепочку вычислений. */
+   A ready grid of cells instead of a "1 2; 3 4" notation, and every cell is
+   validated as it is typed. */
 
 const matrixA = { rows: 3, cols: 3, cells: [] };
 
@@ -2902,7 +2883,7 @@ function makeMatrixStore(store, rows, cols, fill = '') {
   store.cells = Array.from({ length: rows }, () => Array(cols).fill(fill));
 }
 
-/** Rebuild grid ячеек. Сохраняет уже введённые значения. */
+/** Rebuild the matrix grid, keeping the values already typed. */
 function renderMatrixGrid(which) {
   const store = matrixA;
   const host = $('#grid-a');
@@ -2925,7 +2906,7 @@ function renderMatrixGrid(which) {
         validateCell(input);
       });
 
-      // Enter и стрелки ведут себя как в таблице — это заметно удобнее мыши
+      // Enter and the arrow keys move like a spreadsheet row.
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === 'ArrowDown') {
           e.preventDefault();
@@ -2958,20 +2939,20 @@ function focusCell(which, r, c) {
   }
 }
 
-/** Immediate validation ячейки: видно сразу, а не после нажатия кнопки. */
+/** Validate a cell as it is typed, before the button is pressed. */
 function validateCell(input) {
   const value = input.value.trim();
   if (!value) {
     input.classList.remove('invalid');
     return;
   }
-  // Допускаем числа, дроби вида 3/4, pi, e, корни и простые выражения
+  // Accept numbers, fractions such as 3/4, pi, e, roots and simple expressions.
   const ok = /^[-+*/^(). 0-9a-zA-Z\u03c0\u221a]+$/.test(value);
   input.classList.toggle('invalid', !ok);
 }
 
-/** Collect matrix в строку для Python. Check all cells filled. */
-/** Write matrix из ответа Python в ячейки. */
+/** Flatten the grid into the string Python expects; throws when a cell is empty. */
+/** Write the matrix Python returned back into the grid cells. */
 function writeMatrix(which, grid) {
   const store = matrixA;
   if (!Array.isArray(grid) || !grid.length) return;
@@ -3063,7 +3044,7 @@ async function chooseTheme(choice) {
  * Render a title sent as ``[key, arg]``.
  *
  * Python returns a tuple instead of a sentence so the heading can be localised:
- * `("calculus.title.limit", "0")` becomes "Предел в точке 0" or "Limit at 0".
+ * `("calculus.title.limit", "0")` becomes "Limit at 0" in the current language.
  */
 function titleText(title) {
   if (Array.isArray(title)) {
@@ -3179,7 +3160,6 @@ async function evaluateMatrixExpression() {
   if (!expr.trim()) return;
 
   const out = $('#mx-out');
-  const form = $('#mx-form');
   const seq = ++state.matrixEvalSeq;      // this evaluation owns the output
   out.className = 'lcd-out';
   out.textContent = '\u2026';
@@ -3200,9 +3180,6 @@ async function evaluateMatrixExpression() {
     ans.altActive = false;
     ans.primaryLatex = null;
     ans.primaryKey = null;
-    // No mode label here: the field already says what tab this is, and a
-    // "3 × 3" tag next to a result read as if it belonged to the answer.
-    if (form) form.textContent = '';
 
     out.innerHTML = '';
     if (res.latex) {
@@ -3335,7 +3312,7 @@ async function deleteCurrentMatrix() {
 }
 
 /* ============================================================ EQUATIONS
-   Input via MathLive — тот же редактор, что в калькуляторе. */
+   Input via MathLive, the same editor as the calculator. */
 
 function addEquationsRow(latex = '') {
   const host = $('#eq-rows');
@@ -3356,7 +3333,7 @@ function addEquationsRow(latex = '') {
   del.textContent = '×';
   del.title = t('eq.remove');
   del.addEventListener('click', () => {
-    // Keep at least one row: пустой список выглядит как поломка
+    // Keep at least one row: an empty function list reads as a broken panel.
     if ($$('#eq-rows .eq-row').length <= 1) return;
     row.remove();
   });
@@ -3414,8 +3391,6 @@ function renderSolution(selector, res) {
 
 /* ============================================================ AI */
 
-const chatEl = $('#chat');
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -3429,7 +3404,7 @@ function escapeHtml(s) {
  * Four delimiters are recognised. Local models are inconsistent: the same model
  * emits $...$ in one answer and \[...\] in the next, and the prompt asks for
  * $ but does not always win. Handling only $ left raw LaTeX on screen — that is
- * exactly what "Теорема Лагранжа: \[ \lim..." in the screenshot was.
+ * exactly the failure seen when a display delimiter stayed unrendered.
  *
  *   \[ ... \]  display
  *   $$ ... $$  display
@@ -3548,7 +3523,7 @@ function setAiBusy(busy) {
   $('#status-dot').className = 'dot' + (busy ? ' busy' : '');
 }
 
-/** Check environment перед отправкой. Better to notify upfront, чем ждать ошибку. */
+/** Check the environment before submitting, so the user is told up front. */
 async function ensureAiReady() {
   const settings = await py('settings_get');
   const model = settings.model || '';
@@ -3587,10 +3562,6 @@ const chats = {
 function newConversationId() {
   chats.seq += 1;
   return `chat-${Date.now()}-${chats.seq}`;
-}
-
-function activeConversation() {
-  return chats.active || '';
 }
 
 /** Draw the tab strip: title, close button, and a "+" to add one. */
@@ -3955,7 +3926,7 @@ function finishAi(meta) {
   window.__stream = null;
 }
 
-/* Event handlers from Python. pywebview calls them через evaluate_js. */
+/* Event handlers pushed from Python; pywebview calls them through evaluate_js. */
 /* The chip beside the AI title shows the model that answers, by name only. */
 function renderModelChip(name) {
   const chip = $('#ai-model-chip');
@@ -3999,7 +3970,7 @@ window.Euler = {
       if (onbStatus) onbStatus.textContent = `${t('setup.ollama_downloading')} · ${percent}%${gb}`;
       return;
     }
-    const label = d.text ? t(d.text) : '';
+    const label = d.text ? message(d.text) : '';
     if (line) line.textContent = label;
     if (onbStatus) onbStatus.textContent = label;
     if (d.stage === 'install') {
@@ -4055,7 +4026,7 @@ window.Euler = {
   },
 };
 
-/* ---------------------------------------------------------- фото */
+/* ---------------------------------------------------------- photo */
 
 function clearAttachment() {
   state.pendingImage = null;
@@ -4064,7 +4035,7 @@ function clearAttachment() {
   $('#thumb-name').textContent = '';
 }
 
-/** Resize image до 1024 px: vision models do not need more. */
+/** Shrink the photo to 1024 px: a vision model gains nothing beyond that. */
 function prepareImage(source, name) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -4095,15 +4066,25 @@ function prepareImage(source, name) {
 
 /* ============================================================ SETTINGS */
 
-const CATALOG = [
-  { tag: 'qwen2.5:0.5b', size_gb: 0.4, ram_gb: 2,  desc: 'minimal' },
-  { tag: 'qwen2.5:1.5b', size_gb: 1.0, ram_gb: 4,  desc: 'light' },
-  { tag: 'qwen2.5:3b',   size_gb: 2.0, ram_gb: 6,  desc: 'balanced' },
-  { tag: 'qwen2.5:7b',   size_gb: 4.7, ram_gb: 12, desc: 'accurate' },
-  { tag: 'qwen2.5:14b',  size_gb: 9.0, ram_gb: 20, desc: 'pro' },
-  { tag: 'llava:7b',     size_gb: 4.7, ram_gb: 12, desc: 'vision' },
-  { tag: 'qwen2-vl:7b',  size_gb: 4.9, ram_gb: 12, desc: 'vision+' },
-];
+let CATALOG = [];
+
+/** Selectable models, owned by the engine so the two sides cannot disagree. */
+async function modelCatalogue() {
+  if (CATALOG.length) return CATALOG;
+  try {
+    const res = await py('model_catalogue');
+    if (res.ok) CATALOG = res.models;
+  } catch {
+    /* The settings list stays empty; an installed model still answers. */
+  }
+  return CATALOG;
+}
+
+/** One line of the install list: tag, size, tier and the image mark. */
+function modelOptionLabel(model) {
+  const vision = model.vision ? ` ${DOT} ${t('model.vision')}` : '';
+  return `${model.name}  (${model.size_gb} ${t('hw.gb')} ${DOT} ${t(`model.tier.${model.tier}`)}${vision})`;
+}
 
 async function loadSettings() {
   await guarded('#hw-out', async () => {
@@ -4258,7 +4239,7 @@ function retranslateDynamic() {
   buildKeyboard('#kb-eq', null);
   buildKeyboard('#mx-keys', '#mx-input');
 
-  // Conversation tabs carry translated labels ("Диалог N", tooltips)
+  // Conversation tabs carry translated labels and tooltips.
   renderChatTabs();
   renderActiveChat();
 
@@ -4275,9 +4256,6 @@ function retranslateDynamic() {
   const mxStatus = $('#mx-status');
   if (mxStatus && mxStatus.dataset.key) mxStatus.textContent = t(mxStatus.dataset.key);
 
-  // An answer already on screen keeps its text, but the labels around it move
-  const formChip = $('#form-chip');
-  if (formChip && formChip.dataset.key) formChip.textContent = t(formChip.dataset.key);
 }
 
 async function loadOllamaStatus() {
@@ -4298,13 +4276,15 @@ async function loadOllamaStatus() {
     }
 
     const installSelect = $('#set-model');
+    const previous = installSelect.value;
     installSelect.innerHTML = '';
-    for (const m of CATALOG) {
+    for (const model of await modelCatalogue()) {
       const opt = document.createElement('option');
-      opt.value = m.tag;
-      opt.textContent = `${m.tag}  (${m.size_gb} GB · ${m.desc})`;
+      opt.value = model.name;
+      opt.textContent = modelOptionLabel(model);
       installSelect.appendChild(opt);
     }
+    if (previous) installSelect.value = previous;
 
     const installedSelect = $('#set-model-installed');
     installedSelect.innerHTML = `<option value="">${t('settings.not_selected')}</option>`;
@@ -4319,7 +4299,7 @@ async function loadOllamaStatus() {
     if (state.model) installedSelect.value = state.model;
     else if (installedSelect.options.length > 1) installedSelect.value = installedSelect.options[1].value;
   } catch {
-    /* silently: settings are non-critical для работы калькулятора */
+  /* Non-critical: a failed settings read must not block the calculator. */
   }
 }
 
@@ -4375,12 +4355,7 @@ async function restoreUserState(settings) {
 }
 
 
-/**
- * Render a list of result lines.
- *
- * Python returns ``{text, latex}`` pairs. LaTeX is typeset through MathLive so
- * limits, integrals and fractions look identical to what the user typed.
- */
+/** Inline formula markup; falls back to escaped source when MathLive rejects it. */
 function renderInlineMath(latex) {
   try {
     return window.MathLive.convertLatexToMarkup(latex, { displayMode: false });
@@ -4389,15 +4364,20 @@ function renderInlineMath(latex) {
   }
 }
 
+/**
+ * Render a list of result lines.
+ *
+ * Python returns ``{text, latex}`` pairs. LaTeX is typeset through MathLive so
+ * limits, integrals and fractions look identical to what the user typed.
+ */
 function renderLines(lines) {
   const out = [];
 
   for (const line of lines) {
     const item = typeof line === 'string' ? { text: line, latex: null, math: false } : line;
 
-    // A monotonicity line carries a translated label plus a separate formula:
-    // "Возрастает  (π/2; 3π/2)". Joining them into one LaTeX string made the
-    // key appear literally, because no translation can live inside a formula.
+    // A monotonicity line is a translated label plus a separate formula, e.g.
+    // "increasing  (π/2; 3π/2)": a translation cannot live inside LaTeX.
     if (item.key && item.range_latex) {
       out.push(
         `<div class="line"><span class="line-label">${escapeHtml(message(item.key))}</span>`
@@ -4456,6 +4436,7 @@ function switchTab(name) {
 /* ============================================================ ONBOARDING */
 
 const EM_DASH = '\u2014';
+const DOT = '\u00b7';
 
 const ONB_STATE_KEYS = { detecting: 'onb.detecting', done: 'onb.done', failed: 'onb.failed' };
 
@@ -4509,8 +4490,8 @@ async function checkFirstRun() {
       return;
     }
 
-    const model = hw.model || hw.recommended;
-    const meta = CATALOG.find((m) => m.tag === model);
+    const model = hw.model || hw.recommended || '';
+    const sizeGb = hw.size_gb;
     $('#onb-spec').dataset.loaded = '1';
     setOnbState('done');
     const rows = [
@@ -4518,7 +4499,7 @@ async function checkFirstRun() {
       [t('hw.ram'), `${hw.hardware?.ram_gb ?? '?'} ${t('hw.gb')}`],
     ];
     if (hw.hardware?.vram_gb) rows.push([t('hw.vram'), `${hw.hardware.vram_gb} ${t('hw.gb')}`]);
-    rows.push([t('hw.recommend'), model + (meta ? ` (${meta.size_gb} ${t('hw.gb')})` : '')]);
+    rows.push([t('hw.recommend'), model + (sizeGb ? ` (${sizeGb} ${t('hw.gb')})` : '')]);
     $('#onb-spec').innerHTML =
       rows.map(([key, value]) =>
         `<div class="onb-row"><span class="onb-key">${escapeHtml(key)}</span>` +
@@ -4533,7 +4514,7 @@ async function checkFirstRun() {
       await py('settings_set', { onboarding_done: true, model });
     };
   } catch {
-    /* Onboarding should not мешать запуску */
+  /* Onboarding must never block start-up. */
   }
 }
 
@@ -4611,7 +4592,7 @@ async function onDeleteFinished(d) {
 /* ============================================================ EVENT BINDING */
 
 function bindEvents() {
-  /* Калькулятор */
+  /* Calculator */
   buildKeyboard('#keys', '#lcd-input');
 
   // Capture phase: MathLive would otherwise insert a line break on Enter first.
@@ -4652,11 +4633,11 @@ function bindEvents() {
     }
   });
 
-  /* Клавиатуры во вкладках: раскрываются по кнопке, пишут в активное поле */
+  /* Tab keypads: opened by a button, writing into the active field. */
   const kbMap = [
     ['#btn-kb-cx', '#kb-cx', '#cx-fn'],
     ['#btn-kb-an', '#kb-an', '#fn-list .fn-row.is-active math-field'],
-    ['#btn-kb-eq', '#kb-eq', null],   // для уравнений — в последнее поле
+    ['#btn-kb-eq', '#kb-eq', null],   // equations: the last field
   ];
 
   for (const [btnSel, hostSel, fieldSel] of kbMap) {
@@ -4664,7 +4645,7 @@ function bindEvents() {
     const host = $(hostSel);
     if (!btn || !host) continue;
 
-    // Строим клавиатуру сразу, но скрытую: раскрытие мгновенное
+    // Build the keypad up front but hidden: opening it then costs no layout time.
     const target = fieldSel
       || `#eq-rows .eq-row:last-child math-field`;
     buildKeyboard(hostSel, target);
@@ -4674,7 +4655,7 @@ function bindEvents() {
       host.hidden = !willShow;
       btn.setAttribute('aria-pressed', String(willShow));
       if (willShow) {
-        // Перестраиваем на актуальное поле: строки уравнений могли добавиться
+        // Rebuild against the live field: adding equation rows moves the target.
         const actual = fieldSel || '#eq-rows .eq-row:last-child math-field';
         buildKeyboard(hostSel, actual);
         focusField(actual);
@@ -4682,12 +4663,12 @@ function bindEvents() {
     });
   }
 
-  /* Пределы */
+  /* Limits */
   $$('[data-cx]').forEach((btn) => {
     btn.addEventListener('click', () => runCalculus(btn.dataset.cx, btn.dataset.dir || 'both'));
   });
 
-  /* Анализ */
+  /* Analysis */
   on('#btn-analyze', 'click', runAnalysis);
   on('#btn-add-fn', 'click', addFunction);
   on('#btn-open-exports', 'click', async () => {
@@ -4703,7 +4684,7 @@ function bindEvents() {
     renderCanvas();
   });
 
-  /* Матрицы */
+  /* Matrices */
   $$('[data-mrow]').forEach((btn) =>
     btn.addEventListener('click', () => resizeMatrix('a', btn.dataset.mrow === '+' ? 1 : -1, 0)));
   $$('[data-mcol]').forEach((btn) =>
@@ -4749,7 +4730,7 @@ function bindEvents() {
     showResult('#eq-out', '');
   });
 
-  /* ИИ */
+  /* AI */
   if (!chats.items.length) openConversation();
   on('#btn-send', 'click', sendAiMessage);
   on('#ai-input', 'keydown', (e) => {
@@ -4776,7 +4757,7 @@ function bindEvents() {
   });
   on('#btn-unattach', 'click', clearAttachment);
 
-  /* Ctrl+V — фото из буфера */
+  // Ctrl+V pastes a photo from the clipboard
   document.addEventListener('paste', async (e) => {
     if (!$('#view-ai').classList.contains('active')) return;
     const items = e.clipboardData?.items;
@@ -4794,7 +4775,7 @@ function bindEvents() {
     }
   });
 
-  /* Настройки */
+  /* Settings */
   on('#set-temp', 'input', (e) => {
     $('#temp-val').textContent = Number(e.target.value).toFixed(2);
   });
@@ -4933,9 +4914,7 @@ function showSetupBusy(busy) {
 async function startSetup(method, args = []) {
   const line = '#setup-status';
   // Every install and download goes through here, so the Cancel button and the
-  // disabled action buttons are set in one place. Before this only the
-  // "Скачать всё" handler turned them on, and every other download ran with no
-  // way to stop it.
+  // disabled action buttons are set in one place.
   showSetupBusy(true);
   try {
     if (method === 'setup_all' || method === 'ollama_pull') {

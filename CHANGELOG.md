@@ -19,6 +19,107 @@ Nothing yet.
 
 ---
 
+## [5.3.0] — 2026-11-11
+
+Model catalogue moved to the third Qwen generation, plus a code audit.
+
+### Changed
+
+- **Model catalogue**: `qwen3.5` 2b/4b/9b/27b, `gemma4:e4b` and `gemma4:26b`.
+  Of the second generation only `qwen2.5:1.5b` and `qwen2.5:0.5b` remain, for
+  very weak machines. `llava:7b` and `qwen2-vl:7b` are gone; the latter no
+  longer exists in the Ollama registry, so its download always failed.
+- **One catalogue.** The interface reads the list from the engine through
+  `model_catalogue` instead of keeping its own copy, which had drifted (the
+  14B model needed 16 GB in one list and 20 GB in the other).
+- **The default model** is `qwen3.5:4b`, or the first model already installed.
+  A cached hardware profile that names a removed model is recomputed.
+- **`qwen3.5:27b` is recommended only when it fits in VRAM**; on CPU a dense
+  27B model answers too slowly to be useful.
+
+### Fixed
+
+- **Photos reach every model that can read them.** Vision support is decided by
+  model family in one place; `qwen3.5` and `gemma4` were not on the old list,
+  so an attached photo was dropped.
+- **Reasoning mode is switched off** (`think: false`) for Qwen 3.5 and Gemma 4.
+  Hidden reasoning used up the 900-token answer budget and the 160-token
+  classifier budget.
+- **The Settings download buttons work again**: `startSetup` had lost its `try`
+  block, which made `app.js` fail to parse.
+- **The model list in Settings is filled again.** Its label builder used an
+  undeclared `DOT` constant, so the list stayed empty.
+- **The graph no longer loses a function after a deep zoom.** Zooming far out
+  and back in left the cached samples from the huge window on screen, spread
+  too thinly to show the curve, and no new request was sent. A cache now
+  serves a view only when it is at most twice as wide as the window it would
+  be replaced by.
+- **Matrix row and column buttons are translated.** `+ряд`, `−ряд`, `+стлб`
+  and `−стлб` were hard-coded Russian in every interface language.
+- **Downloads check the Ollama version first.** Qwen 3.5 needs Ollama 0.17.5 or
+  newer and Gemma 4 needs 0.20.0 or newer. An older service is reported with
+  both versions instead of a failed download; HTTP 412 from the registry gets
+  the same message.
+- Unused interface variables removed (`chatEl`, `drag`, `field`), found with
+  ESLint `no-undef`/`no-unused-vars`.
+
+### Removed
+
+- The answer-form badge on the calculator display and the matrix tab
+  (ALT still cycles the forms; the label is gone).
+- Dead code: `SYSTEM_PROMPT`, `FORMS`, `MATRIX_FUNCTIONS`, `resource_root`,
+  `started_by_app`, `Registry.as_locals`, `_pdf_escape`, `can_subset`,
+  `activeConversation`, and an unused MoE memory field.
+- Duplicates: three copies of the value-to-LaTeX helper are now
+  `analysis.latex_value` (calculus printed `\tilde{\infty}` and `\text{NaN}`
+  where the other modules printed a dash); `formulaMarkup` merged into
+  `renderInlineMath`; the `llm.supports_vision` copy removed in favour of
+  `hardware.supports_vision`.
+
+### Internal
+
+- Every code comment is in English; redundant history-style comments removed.
+- `tests/test_ollama_version.py` covers the version gate.
+- `tests/test_models.py` covers the catalogue order, vision flags, VRAM gating,
+  the `think` flag, the absence of a second catalogue in the interface and
+  undeclared constants in `app.js`.
+
+---
+
+## [5.2.4] — 2026-11-10
+
+Interface fixes on top of 5.2.3.
+
+### Added
+
+- **Red and violet in the drawing palette**, in spectrum order: red, orange,
+  green, blue, violet, and black last. Every colour has a localised name.
+- **The active mode is named in the footer of the fullscreen plot**: tool,
+  dashed state and the right-button tool, for example "Mode: Pen · Dashed ·
+  RMB: Eraser". Translated in all seven languages.
+- **Tooltips on the working buttons** that had none: calculus, analysis,
+  equations, the matrix row and column buttons and matrix clear, AI, AI setup,
+  onboarding, the plot reset, and the degree/radian switch.
+
+### Changed
+
+- **The dashed toggle and the other active tools look armed.** The pressed
+  state is a light fill with an accent frame. Hover and press do not repaint an
+  armed button.
+- **The three thickness buttons are one fixed size** (30×25 px).
+- **Axis numbers and the x-axis name use the toolbar accent colour** instead of
+  near-black and grey.
+
+### Fixed
+
+- **Text labels on the plot have a real frame.** The frame sat above the text
+  because its height had the wrong sign. A label now stores its size when it is
+  committed, and its frame, hit test, move, rotate and scale are computed from
+  its four corners.
+- **Rotating and scaling a text label moves its glyphs**, not only its anchor.
+
+---
+
 ## [5.2.3] — 2026-11-08
 
 Version bump so an installed copy can be told apart from the previous build.
@@ -1628,6 +1729,7 @@ computational core, not a script with a window on top.
 ---
 
 [Unreleased]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.3...HEAD
+[5.2.4]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.3...v5.2.4
 [5.2.3]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.2...v5.2.3
 [5.2.2]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.1...v5.2.2
 [5.2.1]: https://github.com/M1kLuXamAkLay/Euler.SC/compare/v5.2.0...v5.2.1

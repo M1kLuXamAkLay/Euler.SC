@@ -21,9 +21,6 @@ MAX_LATEX = 480
 SCIENTIFIC_BIG = 1e7
 SCIENTIFIC_SMALL = 1e-4
 
-FORMS = ("auto", "exact", "decimal", "scientific", "mixed", "radical")
-
-
 # --------------------------------------------------------------------- helpers
 def _latex(expr) -> str:
     """LaTeX with unicode-free output that KaTeX/MathLive render correctly."""

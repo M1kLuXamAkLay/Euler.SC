@@ -1,9 +1,9 @@
 """
 Hardware probing and local model selection.
 
-Runs once on first launch and is cached in settings; re-probing on every start
-would cost seconds for nothing. The probe reads memory through ``psutil`` when
-available and falls back to platform APIs otherwise.
+The probe runs once on first launch and is cached in settings; re-probing on
+every start would cost seconds for nothing. Memory is read through ``psutil``
+when available and through kernel APIs otherwise.
 """
 from __future__ import annotations
 
@@ -16,32 +16,64 @@ from dataclasses import dataclass
 RESERVE_GB = 2.0
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Families whose models accept images. Ollama reports this per model, but the
+# picker has to decide before the model is downloaded.
+VISION_FAMILIES = ("qwen3.5", "qwen3-vl", "gemma4", "gemma3", "llava", "moondream",
+                   "qwen2.5vl", "minicpm-v", "bakllava")
+
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """One entry of the local model catalogue."""
+    """One entry of the model catalogue."""
 
     name: str
-    size_gb: float
-    ram_gb: float
+    size_gb: float          # download size
+    ram_gb: float           # budget that keeps it off the swap file
     note: str
+    tier: str
+    vision: bool = False
+    needs_gpu: bool = False
 
 
-# Sizes approximate the Q4_K_M quantisation. Verify with ``ollama show``
-# before publishing a release.
+def family(model: str) -> str:
+    """``qwen3.5:4b`` -> ``qwen3.5``."""
+    return model.split(":", 1)[0].strip().lower()
+
+
+def supports_vision(model: str) -> bool:
+    """True when the model family accepts images."""
+    name = model.strip().lower()
+    return any(name.startswith(tag) for tag in VISION_FAMILIES)
+
+
+# Download sizes come from the Ollama registry manifests; ``ram_gb`` is a
+# judgement call that leaves room for the KV cache and the OS. Ordered largest
+# first, because ``pick`` returns the first entry that fits.
 CATALOG: tuple[ModelSpec, ...] = (
-    ModelSpec("qwen2.5:14b", 9.0, 16.0, "highest quality, needs a discrete GPU"),
-    ModelSpec("qwen2.5:7b", 4.7, 10.0, "balanced quality and speed"),
-    ModelSpec("qwen2.5:3b", 2.0, 6.0, "fast on CPU, weaker on long answers"),
-    ModelSpec("qwen2.5:1.5b", 1.0, 4.0, "for low-end laptops"),
-    ModelSpec("qwen2.5:0.5b", 0.4, 2.5, "smoke test only"),
+    ModelSpec("qwen3.5:27b", 17.5, 24.0, "best answers, needs a discrete GPU",
+              "pro", vision=True, needs_gpu=True),
+    ModelSpec("gemma4:26b", 18.7, 24.0, "mixture-of-experts, fast for its size",
+              "moe", vision=True),
+    ModelSpec("qwen3.5:9b", 6.6, 12.0, "balanced quality and speed",
+              "balanced", vision=True),
+    ModelSpec("gemma4:e4b", 6.6, 12.0, "Google alternative, handles images",
+              "balanced", vision=True),
+    ModelSpec("qwen3.5:4b", 3.3, 8.0, "fits a mid-range laptop",
+              "light", vision=True),
+    ModelSpec("qwen3.5:2b", 2.7, 6.0, "fast on CPU, weaker on long answers",
+              "light", vision=True),
+    ModelSpec("qwen2.5:1.5b", 1.0, 4.0, "text only, for a weak machine",
+              "minimal"),
+    ModelSpec("qwen2.5:0.5b", 0.4, 2.5, "text only, smoke test",
+              "minimal"),
 )
 
-# Multimodal entries. Kept separate so the picker can offer them explicitly.
-VISION_CATALOG: tuple[ModelSpec, ...] = (
-    ModelSpec("qwen2-vl:7b", 4.9, 12.0, "strong image understanding"),
-    ModelSpec("llava:7b", 4.7, 12.0, "reads photos of handwritten tasks"),
-)
+DEFAULT_MODEL = "qwen3.5:4b"
+
+
+def spec_for(model: str) -> ModelSpec | None:
+    """Catalogue entry for an exact tag, or None for a model the user installed by hand."""
+    return next((item for item in CATALOG if item.name == model), None)
 
 
 @dataclass
@@ -110,21 +142,6 @@ def _total_ram_gb() -> float:
     return 8.0
 
 
-def _vram_gb() -> float | None:
-    executable = shutil.which("nvidia-smi")
-    if not executable:
-        return None
-    try:
-        output = subprocess.run(
-            [executable, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5, check=True,
-            creationflags=CREATE_NO_WINDOW,
-        ).stdout
-        return round(int(output.strip().splitlines()[0]) / 1024, 1)
-    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
-        return None
-
-
 def _cpu_info() -> tuple[str, int]:
     cores = os.cpu_count() or 1
     name = platform.processor() or platform.machine() or "unknown"
@@ -149,14 +166,30 @@ def _cpu_info() -> tuple[str, int]:
     return name, cores
 
 
+def _gpu_names_windows() -> list[str]:
+    """Adapter names from Win32_VideoController.
+
+    ``wmic`` is deprecated and absent from recent Windows builds, so this goes
+    through PowerShell, which ships with every supported version.
+    """
+    try:
+        output = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+            capture_output=True, text=True, timeout=10, check=True,
+            creationflags=CREATE_NO_WINDOW,
+        ).stdout
+    except (subprocess.SubprocessError, OSError):
+        return []
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
 
 def _gpu_info() -> tuple[str, str, float | None]:
     """Return ``(name, vendor, vram_gb)`` for the first usable GPU.
 
     NVIDIA is read through ``nvidia-smi``, which every driver ships. AMD and
     Intel cards are detected by name only: their VRAM is not exposed through a
-    portable API, so the value stays ``None`` and the model picker falls back to
-    system RAM.
+    portable API, so the picker falls back to system RAM for the budget.
     """
     exe = shutil.which("nvidia-smi")
     if exe:
@@ -173,27 +206,19 @@ def _gpu_info() -> tuple[str, str, float | None]:
             pass
 
     if platform.system() == "Windows":
-        try:
-            out = subprocess.run(
-                ["wmic", "path", "win32_VideoController", "get", "name"],
-                capture_output=True, text=True, timeout=6,
-                creationflags=CREATE_NO_WINDOW,
-            ).stdout
-            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-            for line in lines[1:]:
-                low = line.lower()
-                if any(tag in low for tag in ("microsoft basic", "remote", "virtual")):
-                    continue
-                vendor = ("amd" if ("amd" in low or "radeon" in low)
-                          else "intel" if "intel" in low
-                          else "nvidia" if "nvidia" in low else "")
-                return line, vendor, None
-        except (subprocess.SubprocessError, OSError):
-            pass
+        for line in _gpu_names_windows():
+            low = line.lower()
+            if any(tag in low for tag in ("microsoft basic", "remote", "virtual")):
+                continue
+            vendor = ("amd" if ("amd" in low or "radeon" in low)
+                      else "intel" if "intel" in low
+                      else "nvidia" if "nvidia" in low else "")
+            return line, vendor, None
 
     if platform.system() == "Linux":
         try:
-            out = subprocess.run(["lspci"], capture_output=True, text=True, timeout=5).stdout
+            out = subprocess.run(["lspci"], capture_output=True, text=True,
+                                 timeout=5, check=False).stdout
             for line in out.splitlines():
                 if "VGA" in line or "3D controller" in line:
                     return line.split(":")[-1].strip(), "linux", None
@@ -203,14 +228,13 @@ def _gpu_info() -> tuple[str, str, float | None]:
     return "", "", None
 
 
-def estimate(hardware: "Hardware", model_name: str) -> dict:
-    """Rough throughput forecast for the chosen model.
+def estimate(hardware: Hardware, model: str) -> dict:
+    """Rough throughput forecast, labelled as an estimate in the interface.
 
-    The numbers are empirical: a 7B model at Q4 runs at roughly
-    ``vram_gb * 6`` tokens per second on GPU and ``cpu_cores * 1.4`` on CPU.
-    They are labelled as estimates in the interface rather than promises.
+    Empirical: a 7B model at Q4 runs at about ``vram_gb * 6`` tokens per second
+    on a GPU and ``cpu_cores * 1.4`` on a CPU; other sizes are not scaled.
     """
-    spec = next((m for m in CATALOG + VISION_CATALOG if m.name == model_name), None)
+    spec = spec_for(model)
     if spec is None:
         return {"device": "unknown", "tokens_per_s": 0, "note": "model not in catalogue"}
 
@@ -241,8 +265,7 @@ def estimate(hardware: "Hardware", model_name: str) -> dict:
 def detect() -> Hardware:
     """Probe CPU, RAM and GPU in one pass."""
     cpu_name, cores = _cpu_info()
-    gpu_name, gpu_vendor, gpu_vram = _gpu_info()
-    vram = gpu_vram if gpu_vram is not None else _vram_gb()
+    gpu_name, gpu_vendor, vram = _gpu_info()
 
     return Hardware(
         total_ram_gb=_total_ram_gb(),
@@ -258,8 +281,11 @@ def detect() -> Hardware:
 
 def pick(hardware: Hardware, catalog: tuple[ModelSpec, ...] = CATALOG
          ) -> tuple[ModelSpec, dict]:
-    """
-    Choose the largest model that fits.
+    """Choose the largest model that fits.
+
+    A model flagged ``needs_gpu`` is skipped unless its whole budget fits in
+    VRAM: a dense 27B model on CPU answers at a few tokens per second, which
+    reads as a broken assistant.
 
     :returns: the specification and a machine-readable reason (a code and its
               numbers); the interface renders it in the user's language.
@@ -269,6 +295,8 @@ def pick(hardware: Hardware, catalog: tuple[ModelSpec, ...] = CATALOG
     for spec in catalog:
         if spec.ram_gb > budget:
             continue
+        if spec.needs_gpu and not (hardware.vram_gb or 0) >= spec.ram_gb:
+            continue   # partial offload of a dense 27B runs slower than the 9B on CPU
         if hardware.vram_gb and spec.ram_gb <= hardware.vram_gb:
             reason = {"code": "vram", "vram": hardware.vram_gb, "needs": spec.ram_gb}
         else:
@@ -283,14 +311,13 @@ def recommend() -> dict:
     """Full recommendation payload consumed by the onboarding screen."""
     hardware = detect()
     spec, reason = pick(hardware)
-    vision_spec, _ = pick(hardware, VISION_CATALOG + CATALOG)
 
     return {
         "model": spec.name,
         "reason": reason,
         "note": spec.note,
         "size_gb": spec.size_gb,
-        "vision_model": vision_spec.name,
+        "vision": spec.vision,
         "throughput": estimate(hardware, spec.name),
         "hardware": {
             "cpu": hardware.cpu_name,
@@ -310,12 +337,13 @@ def recommend() -> dict:
 def catalogue() -> list[dict]:
     """Selectable models with their requirements."""
     return [
-        {"name": spec.name, "size_gb": spec.size_gb,
-         "ram_gb": spec.ram_gb, "note": spec.note,
-         "vision": spec in VISION_CATALOG}
-        for spec in CATALOG + VISION_CATALOG
+        {"name": item.name, "size_gb": item.size_gb, "ram_gb": item.ram_gb,
+         "note": item.note, "tier": item.tier, "vision": item.vision,
+         "needs_gpu": item.needs_gpu}
+        for item in CATALOG
     ]
 
 
-__all__ = ["Hardware", "ModelSpec", "detect", "pick", "recommend",
-           "catalogue", "CATALOG", "VISION_CATALOG"]
+__all__ = ["Hardware", "ModelSpec", "detect", "pick", "recommend", "estimate",
+           "catalogue", "spec_for", "supports_vision", "family", "CATALOG",
+           "DEFAULT_MODEL", "VISION_FAMILIES"]

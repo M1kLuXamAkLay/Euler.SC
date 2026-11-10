@@ -27,7 +27,7 @@ MAX_ZEROS = 8
 
 
 # --------------------------------------------------------------------- helpers
-def _line(text: str, latex: str | None = None) -> dict:
+def result_line(text: str, latex: str | None = None) -> dict:
     """A result line.
 
     ``latex=None`` means "this is a message, translate it". Otherwise ``latex``
@@ -75,8 +75,8 @@ def ln_latex(value) -> str:
     return "".join(out)
 
 
-def _tex(value) -> str:
-    """LaTeX for a value, with infinities written as proper symbols."""
+def latex_value(value) -> str:
+    """LaTeX for a value, with infinities and undefined results as symbols."""
     if value is sp.oo:
         return "+" + BACKSLASH + "infty"
     if value is -sp.oo:
@@ -131,11 +131,11 @@ def prepare(text: str):
     expression = parse(text)
     if not isinstance(expression, sp.Expr):
         raise ExprError("ExprError.not_a_function")
-    var = detect_variable(expression)
+    var = primary_symbol(expression)
     return expression, var, var.name
 
 
-def detect_variable(expression) -> sp.Symbol:
+def primary_symbol(expression) -> sp.Symbol:
     """The variable in play: ``x`` unless only another letter appears."""
     free = sorted(expression.free_symbols, key=lambda s: s.name)
     for symbol in free:
@@ -160,9 +160,9 @@ def interval_latex(value) -> str | None:
         return "\\varnothing"
     if isinstance(value, sp.Interval):
         left = ("-\\infty" if value.left is -sp.oo
-                else "+\\infty" if value.left is sp.oo else _tex(value.left))
+                else "+\\infty" if value.left is sp.oo else latex_value(value.left))
         right = ("+\\infty" if value.right is sp.oo
-                 else "-\\infty" if value.right is -sp.oo else _tex(value.right))
+                 else "-\\infty" if value.right is -sp.oo else latex_value(value.right))
         bracket_l = "(" if value.left_open else "["
         bracket_r = ")" if value.right_open else "]"
         return f"\\left{bracket_l}{left};\\; {right}\\right{bracket_r}"
@@ -170,7 +170,7 @@ def interval_latex(value) -> str | None:
         parts = sorted(value.args, key=lambda part: float(getattr(part, "left", 0) or 0))
         return " \\cup ".join(interval_latex(part) for part in parts)
     if isinstance(value, sp.FiniteSet):
-        return "\\{" + ",\\; ".join(_tex(item) for item in value.args) + "\\}"
+        return "\\{" + ",\\; ".join(latex_value(item) for item in value.args) + "\\}"
     return None
 
 
@@ -196,7 +196,7 @@ def domain(expression, var) -> dict:
         scope = sp.calculus.util.continuous_domain(expression, var, sp.S.Reals)
         latex = interval_latex(scope)
         if latex:
-            return _line(interval_text(scope), latex)
+            return result_line(interval_text(scope), latex)
     except (NotImplementedError, ValueError, TypeError):
         pass
     return _msg("analysis.undefined")
@@ -207,7 +207,7 @@ def value_range(expression, var) -> dict:
         span = sp.calculus.util.function_range(expression, var, sp.S.Reals)
         latex = interval_latex(span)
         if latex:
-            return _line(interval_text(span), latex)
+            return result_line(interval_text(span), latex)
     except (NotImplementedError, ValueError, TypeError, AttributeError):
         pass
     return _msg("analysis.undefined")
@@ -226,8 +226,8 @@ def zeros(expression, var, window: tuple[float, float] | None = None) -> dict:
         return _msg("analysis.no_zeros")
 
     parts = [f"{var.name} = {num(r)}" for r in roots]
-    tex = ",\\; ".join(f"{var.name} = {_tex(r)}" for r in roots)
-    return _line(", ".join(parts), tex)
+    tex = ",\\; ".join(f"{var.name} = {latex_value(r)}" for r in roots)
+    return result_line(", ".join(parts), tex)
 
 
 def _zeros_in_window(expression, var, low: float, high: float) -> list:
@@ -314,7 +314,7 @@ def intercept(expression, var) -> dict:
         value = expression.subs(var, 0)
         if value.is_real is False or _failed(value):
             return _msg("analysis.undefined")
-        return _line(f"f(0) = {num(value)}", f"f(0) = {_tex(value)}")
+        return result_line(f"f(0) = {num(value)}", f"f(0) = {latex_value(value)}")
     except (ValueError, TypeError, AttributeError):
         return _msg("analysis.undefined")
 
@@ -335,7 +335,7 @@ def periodicity(expression, var) -> dict:
     try:
         period = sp.periodicity(expression, var)
         if period:
-            return _line(f"T = {num(period)}", f"T = {_tex(period)}")
+            return result_line(f"T = {num(period)}", f"T = {latex_value(period)}")
         return _msg("analysis.aperiodic")
     except (ValueError, TypeError, NotImplementedError):
         return _msg("analysis.aperiodic")
@@ -368,25 +368,25 @@ def monotony(expression, var, window: tuple[float, float] | None = None) -> list
         sign = _sign_at(derivative, var, (low + high) / 2)
         key = "analysis.increasing" if sign > 0 else "analysis.decreasing"
         return [entry(key, f"({num(low)}; {num(high)})",
-                      f"\\left({_tex(low)};\\; {_tex(high)}\\right)")]
+                      f"\\left({latex_value(low)};\\; {latex_value(high)}\\right)")]
 
     lines: list[dict] = []
 
     first = critical[0]
     key = "analysis.increasing" if _sign_at(derivative, var, (low + float(first)) / 2) > 0 \
         else "analysis.decreasing"
-    lines.append(entry(key, f"{var.name} < {num(first)}", f"{var.name} < {_tex(first)}"))
+    lines.append(entry(key, f"{var.name} < {num(first)}", f"{var.name} < {latex_value(first)}"))
 
     for left, right in zip(critical, critical[1:]):
         key = "analysis.increasing" if _sign_at(
             derivative, var, (float(left) + float(right)) / 2) > 0 else "analysis.decreasing"
         lines.append(entry(key, f"({num(left)}; {num(right)})",
-                           f"\\left({_tex(left)};\\; {_tex(right)}\\right)"))
+                           f"\\left({latex_value(left)};\\; {latex_value(right)}\\right)"))
 
     last = critical[-1]
     key = "analysis.increasing" if _sign_at(derivative, var, (float(last) + high) / 2) > 0 \
         else "analysis.decreasing"
-    lines.append(entry(key, f"{var.name} > {num(last)}", f"{var.name} > {_tex(last)}"))
+    lines.append(entry(key, f"{var.name} > {num(last)}", f"{var.name} > {latex_value(last)}"))
 
     return lines[:8]
 
@@ -428,14 +428,14 @@ def extrema_on(expression, var, low: float, high: float) -> list[dict]:
     minimum = min(values, key=lambda item: float(item[1]))
 
     lines = [
-        _line(f"max f({num(maximum[0])}) = {num(maximum[1])}",
-              f"\\max f({_tex(maximum[0])}) = {_tex(expression.subs(var, maximum[0]))}"),
-        _line(f"min f({num(minimum[0])}) = {num(minimum[1])}",
-              f"\\min f({_tex(minimum[0])}) = {_tex(expression.subs(var, minimum[0]))}"),
+        result_line(f"max f({num(maximum[0])}) = {num(maximum[1])}",
+              f"\\max f({latex_value(maximum[0])}) = {latex_value(expression.subs(var, maximum[0]))}"),
+        result_line(f"min f({num(minimum[0])}) = {num(minimum[1])}",
+              f"\\min f({latex_value(minimum[0])}) = {latex_value(expression.subs(var, minimum[0]))}"),
     ]
     if critical:
-        joined = ",\\; ".join(f"{var.name} = {_tex(p)}" for p in critical[:6])
-        lines.append(_line("critical: " + ", ".join(f"{var.name} = {num(p)}" for p in critical[:6]),
+        joined = ",\\; ".join(f"{var.name} = {latex_value(p)}" for p in critical[:6])
+        lines.append(result_line("critical: " + ", ".join(f"{var.name} = {num(p)}" for p in critical[:6]),
                            f"f'(x) = 0:\\; {joined}"))
     return lines
 
@@ -466,9 +466,9 @@ def asymptotes(expression, var) -> list[dict]:
             if _failed(left) or _failed(right):
                 continue
             if left in (sp.oo, -sp.oo) or right in (sp.oo, -sp.oo):
-                found.append(_line(
+                found.append(result_line(
                     f"{var.name} = {num(point)} (vertical)",
-                    f"{var.name} = {_tex(point)}\\;\\text{{(}}analysis.vertical\\text{{)}}"))
+                    f"{var.name} = {latex_value(point)}\\;\\text{{(}}analysis.vertical\\text{{)}}"))
     except (NotImplementedError, ValueError, TypeError):
         pass
 
@@ -482,9 +482,9 @@ def asymptotes(expression, var) -> list[dict]:
             continue
         # Python < 3.12 forbids backslashes inside f-string expressions
         direction = "+\u221e" if target is sp.oo else "\u2212\u221e"
-        found.append(_line(
+        found.append(result_line(
             f"y = {num(value)} (horizontal, {var.name}\u2192{direction})",
-            f"y = {_tex(value)}\\;\\text{{(}}analysis.horizontal\\text{{)}}"))
+            f"y = {latex_value(value)}\\;\\text{{(}}analysis.horizontal\\text{{)}}"))
 
     return found or [_msg("analysis.no_asymptotes")]
 
@@ -499,15 +499,15 @@ def limits_at_infinity(expression, var) -> list[dict]:
             continue
 
         if _failed(value):
-            lines.append(_line(f"lim({var.name}\u2192{num(target)}) does not exist",
+            lines.append(result_line(f"lim({var.name}\u2192{num(target)}) does not exist",
                                f"\\lim_{{{var.name} \\to {label}}} {ln_latex(expression)}"
                                "\\;\\text{—}\\;analysis.oscillates"))
         elif value is sp.oo or value is -sp.oo:
-            lines.append(_line(f"lim({var.name}\u2192{num(target)}) = {num(value)}",
-                               f"\\lim_{{{var.name} \\to {label}}} {ln_latex(expression)} = {_tex(value)}"))
+            lines.append(result_line(f"lim({var.name}\u2192{num(target)}) = {num(value)}",
+                               f"\\lim_{{{var.name} \\to {label}}} {ln_latex(expression)} = {latex_value(value)}"))
         else:
-            lines.append(_line(f"lim({var.name}\u2192{num(target)}) = {num(value)}",
-                               f"\\lim_{{{var.name} \\to {label}}} {ln_latex(expression)} = {_tex(value)}"))
+            lines.append(result_line(f"lim({var.name}\u2192{num(target)}) = {num(value)}",
+                               f"\\lim_{{{var.name} \\to {label}}} {ln_latex(expression)} = {latex_value(value)}"))
     return lines
 
 
@@ -523,9 +523,9 @@ def limits_at(expression, var, point) -> list[dict]:
             continue
         # Python < 3.12 forbids backslashes inside f-string expressions
         side = "\u2212" if direction == "-" else "+"
-        lines.append(_line(
+        lines.append(result_line(
             f"lim({var.name}\u2192{num(point)}{side}) = {num(value)}",
-            f"\\lim_{{{var.name} \\to {_tex(point)}^{{{sign}}}}} {ln_latex(expression)} = {_tex(value)}"))
+            f"\\lim_{{{var.name} \\to {latex_value(point)}^{{{sign}}}}} {ln_latex(expression)} = {latex_value(value)}"))
 
     try:
         left = sp.limit(expression, var, point, "-")
@@ -553,10 +553,10 @@ def full_report(text: str, interval: tuple[float, float] | None = None) -> dict:
     sections: list[dict] = []
 
     def add(title: str, lines) -> None:
-        normalised = [ln if isinstance(ln, dict) else _line(str(ln)) for ln in lines]
+        normalised = [ln if isinstance(ln, dict) else result_line(str(ln)) for ln in lines]
         sections.append({"title": title, "lines": normalised})
 
-    add("analysis.section.function", [_line(f"f(x) = {clean_expr(str(simplified))}",
+    add("analysis.section.function", [result_line(f"f(x) = {clean_expr(str(simplified))}",
                                             f"f({name}) = {ln_latex(simplified)}")])
     add("analysis.section.domain", [domain(expression, var)])
     add("analysis.section.range", [value_range(expression, var)])
@@ -566,7 +566,7 @@ def full_report(text: str, interval: tuple[float, float] | None = None) -> dict:
     add("analysis.section.periodicity", [periodicity(expression, var)])
 
     first_derivative = sp.simplify(sp.diff(expression, var))
-    add("analysis.section.derivative", [_line(
+    add("analysis.section.derivative", [result_line(
         clean_expr(str(first_derivative)), f"f'({name}) = {ln_latex(first_derivative)}")])
 
     add("analysis.section.monotony", monotony(expression, var, window))
@@ -595,7 +595,7 @@ def full_report(text: str, interval: tuple[float, float] | None = None) -> dict:
     try:
         antiderivative = sp.integrate(expression, var)
         if not antiderivative.has(sp.Integral):
-            add("analysis.section.integral", [_line(
+            add("analysis.section.integral", [result_line(
                 f"\u222bf(x)dx = {clean_expr(str(antiderivative))} + C",
                 f"\\int f({name})\\,d{name} = {ln_latex(antiderivative)} + C")])
         else:
@@ -618,17 +618,17 @@ def limit_at_point(text: str, point_text: str, direction: str = "both") -> dict:
     if direction == "left":
         value = sp.limit(expression, var, target, "-")
         return {"title": ("calculus.title.limit.left", num(target)),
-                "lines": [_line(f"lim({name}\u2192{num(target)}\u2212) {clean_expr(str(expression))} = {num(value)}",
-                                f"\\lim_{{{name} \\to {_tex(target)}^-}} {ln_latex(expression)} = {_tex(value)}")]}
+                "lines": [result_line(f"lim({name}\u2192{num(target)}\u2212) {clean_expr(str(expression))} = {num(value)}",
+                                f"\\lim_{{{name} \\to {latex_value(target)}^-}} {ln_latex(expression)} = {latex_value(value)}")]}
     if direction == "right":
         value = sp.limit(expression, var, target, "+")
         return {"title": ("calculus.title.limit.right", num(target)),
-                "lines": [_line(f"lim({name}\u2192{num(target)}+) {clean_expr(str(expression))} = {num(value)}",
-                                f"\\lim_{{{name} \\to {_tex(target)}^+}} {ln_latex(expression)} = {_tex(value)}")]}
+                "lines": [result_line(f"lim({name}\u2192{num(target)}+) {clean_expr(str(expression))} = {num(value)}",
+                                f"\\lim_{{{name} \\to {latex_value(target)}^+}} {ln_latex(expression)} = {latex_value(value)}")]}
 
     value = sp.limit(expression, var, target)
-    lines = [_line(f"lim({name}\u2192{num(target)}) {clean_expr(str(expression))} = {num(value)}",
-                   f"\\lim_{{{name} \\to {_tex(target)}}} {ln_latex(expression)} = {_tex(value)}")]
+    lines = [result_line(f"lim({name}\u2192{num(target)}) {clean_expr(str(expression))} = {num(value)}",
+                   f"\\lim_{{{name} \\to {latex_value(target)}}} {ln_latex(expression)} = {latex_value(value)}")]
     lines.extend(limits_at(expression, var, target)[2:])
     return {"title": ("calculus.title.limit", num(target)), "lines": lines}
 
@@ -637,5 +637,5 @@ __all__ = [
     "full_report", "limit_at_point", "prepare", "num", "clean_expr",
     "domain", "value_range", "zeros", "intercept", "parity", "periodicity",
     "monotony", "extrema_on", "asymptotes", "limits_at_infinity", "limits_at",
-    "interval_text", "interval_latex", "detect_variable",
+    "interval_text", "interval_latex", "primary_symbol",
 ]

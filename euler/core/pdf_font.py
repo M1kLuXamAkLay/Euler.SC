@@ -220,11 +220,6 @@ class EmbeddedFont:
             return round(self.advances[glyph_id] * 1000 / self.units_per_em)
         return 500
 
-    @property
-    def can_subset(self) -> bool:
-        """True when the face has TrueType outlines this writer can trim."""
-        return "glyf" in self._tables and "loca" in self._tables
-
     def covers(self, text: str) -> bool:
         """True when every non-space character has a glyph."""
         return all(ord(ch) in self.cmap or ch.isspace() for ch in text)
@@ -297,7 +292,7 @@ def _composite_children(glyph_data: bytes) -> list[int]:
     return children
 
 
-def subset_font(font: "EmbeddedFont", used: set[int]) -> bytes:
+def subset_font(font: EmbeddedFont, used: set[int]) -> bytes:
     """A copy of the font carrying only the glyphs in ``used``.
 
     Glyph ids are preserved, so ``CIDToGIDMap /Identity`` stays valid and the

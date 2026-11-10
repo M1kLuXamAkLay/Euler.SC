@@ -56,13 +56,13 @@
     </nav>
     <div class="top-right">
       <div class="unit-toggle" role="group">
-        <button data-unit="deg" aria-pressed="true">DEG</button>
-        <button data-unit="rad" aria-pressed="false">RAD</button>
+        <button data-i18n-title="tip.unit.deg" data-unit="deg" aria-pressed="true">DEG</button>
+        <button data-i18n-title="tip.unit.rad" data-unit="rad" aria-pressed="false">RAD</button>
       </div>
     </div>
   </header>
 
-  <!-- ============================ КАЛЬКУЛЯТОР ============================ -->
+  <!-- ============================ CALCULATOR ============================ -->
   <section class="view active" id="view-calc">
     <div class="calc-shell">
       <div class="calc-body">
@@ -71,7 +71,6 @@
             <span id="lcd-unit">DEG</span>
             <span data-i18n="calc.mode">COMP</span>
             <span class="grow"></span>
-            <span id="form-chip" class="form-chip">exact</span>
             <span id="lcd-model">—</span>
           </div>
           <math-field id="lcd-input" class="lcd-input" default-mode="math"></math-field>
@@ -82,7 +81,7 @@
     </div>
   </section>
 
-  <!-- ============================ ПРЕДЕЛЫ И ИНТЕГРАЛЫ ============================ -->
+  <!-- ============================ LIMITS AND INTEGRALS ============================ -->
   <section class="view" id="view-calculus">
     <div class="pane">
       <div class="card">
@@ -115,13 +114,13 @@
           <div class="keys-inline" id="kb-cx" hidden></div>
 
           <div class="op-grid" style="margin-top:12px">
-            <button class="btn" data-cx="limit" data-dir="both" data-i18n="calculus.limit.both">Двусторонний</button>
-            <button class="btn" data-cx="limit" data-dir="left" data-i18n="calculus.limit.left">Слева</button>
-            <button class="btn" data-cx="limit" data-dir="right" data-i18n="calculus.limit.right">Справа</button>
-            <button class="btn" data-cx="derivative" data-i18n="calculus.derivative">Производная</button>
-            <button class="btn" data-cx="critical" data-i18n="calculus.critical">Критические точки</button>
-            <button class="btn" data-cx="integral" data-i18n="calculus.integral">Неопределённый интеграл</button>
-            <button class="btn primary" data-cx="definite" data-i18n="calculus.definite">Определённый интеграл</button>
+            <button class="btn" data-i18n-title="tip.cx.limit.both" data-cx="limit" data-dir="both" data-i18n="calculus.limit.both">Двусторонний</button>
+            <button class="btn" data-i18n-title="tip.cx.limit.left" data-cx="limit" data-dir="left" data-i18n="calculus.limit.left">Слева</button>
+            <button class="btn" data-i18n-title="tip.cx.limit.right" data-cx="limit" data-dir="right" data-i18n="calculus.limit.right">Справа</button>
+            <button class="btn" data-i18n-title="tip.cx.derivative" data-cx="derivative" data-i18n="calculus.derivative">Производная</button>
+            <button class="btn" data-i18n-title="tip.cx.critical" data-cx="critical" data-i18n="calculus.critical">Критические точки</button>
+            <button class="btn" data-i18n-title="tip.cx.integral" data-cx="integral" data-i18n="calculus.integral">Неопределённый интеграл</button>
+            <button class="btn primary" data-i18n-title="tip.cx.definite" data-cx="definite" data-i18n="calculus.definite">Определённый интеграл</button>
           </div>
         </div>
       </div>
@@ -133,7 +132,7 @@
     </div>
   </section>
 
-  <!-- ============================ АНАЛИЗ ФУНКЦИИ ============================ -->
+  <!-- ============================ FUNCTION ANALYSIS ============================ -->
   <section class="view" id="view-analysis">
     <div class="pane analysis-pane">
       <div class="analysis-top">
@@ -145,7 +144,7 @@
           <div class="card-body">
             <div class="fn-list" id="fn-list"></div>
             <div class="composer-row" style="margin-top:8px">
-              <button class="btn small" id="btn-add-fn" data-i18n="analysis.add_fn">+ Добавить функцию</button>
+              <button class="btn small" data-i18n-title="tip.an.add_fn" id="btn-add-fn" data-i18n="analysis.add_fn">+ Добавить функцию</button>
               <button class="btn small" id="btn-kb-an" data-i18n="calc.keyboard">⌨ Клавиатура</button>
             </div>
             <div class="keys-inline" id="kb-an" hidden></div>
@@ -154,9 +153,9 @@
               <math-field class="mf-input" id="an-interval">-2; 2</math-field>
             </div>
             <div class="op-grid" style="margin-top:10px">
-              <button class="btn primary" id="btn-analyze" data-i18n="analysis.full">Полный анализ</button>
-              <button class="btn" id="btn-graph-fullscreen" data-i18n="analysis.fullscreen">⛶ Во весь экран</button>
-              <button class="btn" id="btn-clear-analysis" data-i18n="common.clear">Очистить</button>
+              <button class="btn primary" data-i18n-title="tip.an.analyze" id="btn-analyze" data-i18n="analysis.full">Полный анализ</button>
+              <button class="btn" data-i18n-title="tip.an.fullscreen" id="btn-graph-fullscreen" data-i18n="analysis.fullscreen">⛶ Во весь экран</button>
+              <button class="btn" data-i18n-title="tip.an.clear" id="btn-clear-analysis" data-i18n="common.clear">Очистить</button>
             </div>
           </div>
         </div>
@@ -180,7 +179,7 @@
     </div>
   </section>
 
-  <!-- ============================ МАТРИЦЫ ============================ -->
+  <!-- ============================ MATRICES ============================ -->
   <section class="view" id="view-matrix">
     <div class="pane">
       <div class="grid-2" style="flex:1; min-height:0">
@@ -188,9 +187,9 @@
         <!-- ------------------------------------------------ matrix editor -->
         <div class="card">
           <div class="card-head">
-            <button class="btn small" id="mx-prev" title="Previous">&#8592;</button>
+            <button class="btn small" data-i18n-title="tip.mx.prev" id="mx-prev" title="Previous">&#8592;</button>
             <span class="mx-name" id="mx-name">&mdash;</span>
-            <button class="btn small" id="mx-next" title="Next">&#8594;</button>
+            <button class="btn small" data-i18n-title="tip.mx.next" id="mx-next" title="Next">&#8594;</button>
             <span class="grow"></span>
             <span class="card-note" id="mx-size">3 &times; 3</span>
           </div>
@@ -200,14 +199,14 @@
             <!-- size + fill: everything that changes the shape -->
             <div class="matrix-tools">
               <span class="tool-label" data-i18n="matrix.size">Размер</span>
-              <button class="btn small" data-mrow="+" title="Add row">+&#1088;&#1103;&#1076;</button>
-              <button class="btn small" data-mrow="-" title="Remove row">&minus;&#1088;&#1103;&#1076;</button>
-              <button class="btn small" data-mcol="+" title="Add column">+&#1089;&#1090;&#1083;&#1073;</button>
-              <button class="btn small" data-mcol="-" title="Remove column">&minus;&#1089;&#1090;&#1083;&#1073;</button>
+              <button class="btn small" data-i18n="matrix.add_row" data-i18n-title="tip.mx.addrow" data-mrow="+" title="Add row">+ строка</button>
+              <button class="btn small" data-i18n="matrix.del_row" data-i18n-title="tip.mx.delrow" data-mrow="-" title="Remove row">&minus; строка</button>
+              <button class="btn small" data-i18n="matrix.add_col" data-i18n-title="tip.mx.addcol" data-mcol="+" title="Add column">+ столбец</button>
+              <button class="btn small" data-i18n="matrix.del_col" data-i18n-title="tip.mx.delcol" data-mcol="-" title="Remove column">&minus; столбец</button>
               <span class="tool-sep"></span>
               <button class="btn small" data-mfill="identity" data-i18n="matrix.identity">Единичная</button>
               <button class="btn small" data-mfill="example" data-i18n="matrix.random">Пример</button>
-              <button class="btn small" data-mfill="clear" data-i18n="matrix.clear">Очистить</button>
+              <button class="btn small" data-i18n-title="tip.mx.clear" data-mfill="clear" data-i18n="matrix.clear">Очистить</button>
             </div>
 
             <div class="matrix-grid" id="grid-a"></div>
@@ -232,7 +231,6 @@
               <div class="lcd-status">
                 <span data-i18n="tab.matrix">Матрицы</span>
                 <span class="grow"></span>
-                <span id="mx-form"></span>
               </div>
               <math-field id="mx-input" class="lcd-input" default-mode="math"></math-field>
               <div class="lcd-out" id="mx-out"></div>
@@ -246,7 +244,7 @@
     </div>
   </section>
 
-  <!-- ============================ УРАВНЕНИЯ ============================ -->
+  <!-- ============================ EQUATIONS ============================ -->
   <section class="view" id="view-equations">
     <div class="pane">
       <div class="grid-2" style="flex:1; min-height:0">
@@ -254,7 +252,7 @@
           <div class="card-head">
             <span class="card-title" data-i18n="eq.title">Уравнения и неравенства</span>
             <span class="grow"></span>
-            <button class="btn small" id="btn-eq-add" data-i18n="eq.add">Добавить</button>
+            <button class="btn small" data-i18n-title="tip.eq.add" id="btn-eq-add" data-i18n="eq.add">Добавить</button>
           </div>
           <div class="card-body" style="gap:8px; display:flex; flex-direction:column">
             <p class="note" data-i18n="eq.hint">По одному уравнению в строке. Два и более — решаются как система.</p>
@@ -265,10 +263,10 @@
           </div>
           <div class="keys-inline" id="kb-eq" hidden></div>
           <div class="card-head" style="border-top:3px solid var(--accent)">
-            <button class="btn primary" id="btn-eq-solve" data-i18n="common.solve">Решение</button>
-            <button class="btn" id="btn-steps" data-i18n="steps.show">По шагам</button>
+            <button class="btn primary" data-i18n-title="tip.eq.solve" id="btn-eq-solve" data-i18n="common.solve">Решение</button>
+            <button class="btn" data-i18n-title="tip.eq.steps" id="btn-steps" data-i18n="steps.show">По шагам</button>
             <span class="grow"></span>
-            <button class="btn" id="btn-eq-clear" data-i18n="common.clear">Очистить</button>
+            <button class="btn" data-i18n-title="tip.eq.clear" id="btn-eq-clear" data-i18n="common.clear">Очистить</button>
           </div>
         </div>
         <div class="card">
@@ -277,9 +275,9 @@
           </div>
           <div class="card-body"><div class="result" id="eq-out"></div></div>
           <div class="pane-actions">
-            <button class="btn small" id="btn-export-pdf" data-i18n="export.pdf">PDF</button>
-            <button class="btn small" id="btn-export-tex" data-i18n="export.latex">LaTeX</button>
-            <button class="btn small" id="btn-open-exports" data-i18n="export.open_folder">Папка экспорта</button>
+            <button class="btn small" data-i18n-title="tip.export.pdf" id="btn-export-pdf" data-i18n="export.pdf">PDF</button>
+            <button class="btn small" data-i18n-title="tip.export.tex" id="btn-export-tex" data-i18n="export.latex">LaTeX</button>
+            <button class="btn small" data-i18n-title="tip.export.open" id="btn-open-exports" data-i18n="export.open_folder">Папка экспорта</button>
             <span class="grow"></span>
             <span class="status-line" id="export-status"></span>
           </div>
@@ -288,7 +286,7 @@
     </div>
   </section>
 
-  <!-- ============================ ИИ ============================ -->
+  <!-- ============================ AI ============================ -->
   <section class="view" id="view-ai">
     <div class="pane">
       <div class="card" style="flex:1; min-height:0">
@@ -312,11 +310,11 @@
           </div>
           <textarea id="ai-input" data-i18n-ph="ai.placeholder"></textarea>
           <div class="composer-row">
-            <button class="btn" id="btn-photo" data-i18n="ai.photo">Фото</button>
-            <button class="btn" id="btn-newdialog" data-i18n="ai.new">Новый диалог</button>
+            <button class="btn" data-i18n-title="tip.ai.photo" id="btn-photo" data-i18n="ai.photo">Фото</button>
+            <button class="btn" data-i18n-title="tip.ai.new" id="btn-newdialog" data-i18n="ai.new">Новый диалог</button>
             <span class="grow"></span>
-            <button class="btn" id="btn-stop" disabled data-i18n="ai.stop">Стоп</button>
-            <button class="btn primary" id="btn-send" data-i18n="ai.send">Отправить</button>
+            <button class="btn" data-i18n-title="tip.ai.stop" id="btn-stop" disabled data-i18n="ai.stop">Стоп</button>
+            <button class="btn primary" data-i18n-title="tip.ai.send" id="btn-send" data-i18n="ai.send">Отправить</button>
           </div>
           <div class="status-line" id="ai-status"></div>
         </div>
@@ -324,7 +322,7 @@
     </div>
   </section>
 
-  <!-- ============================ НАСТРОЙКИ ============================ -->
+  <!-- ============================ SETTINGS ============================ -->
 
 
   <section class="view" id="view-settings">
@@ -387,7 +385,7 @@
             <span class="note" data-i18n="settings.temp_hint">0 — строго, 1 — разнообразно</span>
           </div>
           <div class="composer-row" style="margin-top:12px">
-            <button class="btn primary" id="btn-setup-all" data-i18n="settings.setup_all">Установить всё</button>
+            <button class="btn primary" data-i18n-title="tip.setup.all" id="btn-setup-all" data-i18n="settings.setup_all">Установить всё</button>
             <button class="btn" id="btn-setup-cancel" hidden data-i18n="setup.cancel">Отменить</button>
             <button class="btn" id="btn-install-ollama" data-i18n="settings.only_service">Только сервис</button>
             <button class="btn" id="btn-start-ollama" data-i18n="settings.start_service">Запустить сервис</button>
@@ -435,9 +433,9 @@
       <div class="onb-footer">
         <span class="onb-note" data-i18n="settings.hardware_note">Определяется при первом запуске</span>
         <div class="onb-actions">
-          <button class="btn" id="onb-later" data-i18n="onb.later">Позже</button>
+          <button class="btn" data-i18n-title="tip.onb.later" id="onb-later" data-i18n="onb.later">Позже</button>
           <button class="btn" id="onb-cancel" hidden data-i18n="setup.cancel">Отменить</button>
-          <button class="btn primary" id="onb-accept" data-i18n="onb.accept">Установить и начать</button>
+          <button class="btn primary" data-i18n-title="tip.onb.accept" id="onb-accept" data-i18n="onb.accept">Установить и начать</button>
         </div>
       </div>
     </div>
@@ -460,10 +458,12 @@
         <button class="btn small draw-tool" data-tool="circle" aria-pressed="false" data-i18n-title="draw.tool.circle" title="Circle (O)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7.5"/></svg></button>
         <button class="btn small draw-tool" data-tool="eraser" aria-pressed="false" data-i18n-title="draw.tool.eraser" title="Eraser (E)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 20h11"/><path d="M15 4l5 5-8 8H7l-3-3 11-11z"/></svg></button>
         <span class="draw-sep" aria-hidden="true"></span>
-        <button class="draw-color" data-color="#2e1c20" style="--c:#2e1c20" aria-label="Ink" aria-pressed="true"></button>
-        <button class="draw-color" data-color="#2f5fb3" style="--c:#2f5fb3" aria-label="Blue" aria-pressed="false"></button>
-        <button class="draw-color" data-color="#2f7d5a" style="--c:#2f7d5a" aria-label="Green" aria-pressed="false"></button>
-        <button class="draw-color" data-color="#c4501f" style="--c:#c4501f" aria-label="Orange" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#c93a3a" style="--c:#c93a3a" data-i18n-title="draw.color.red" title="Red" aria-label="Red" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#c4501f" style="--c:#c4501f" data-i18n-title="draw.color.orange" title="Orange" aria-label="Orange" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#2f7d5a" style="--c:#2f7d5a" data-i18n-title="draw.color.green" title="Green" aria-label="Green" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#2f5fb3" style="--c:#2f5fb3" data-i18n-title="draw.color.blue" title="Blue" aria-label="Blue" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#7a4fb0" style="--c:#7a4fb0" data-i18n-title="draw.color.violet" title="Violet" aria-label="Violet" aria-pressed="false"></button>
+        <button class="draw-color" data-color="#2e1c20" style="--c:#2e1c20" data-i18n-title="draw.color.black" title="Black" aria-label="Black" aria-pressed="true"></button>
         <span class="draw-sep" aria-hidden="true"></span>
         <button class="btn small draw-width" data-width="2" aria-pressed="true" data-i18n-title="draw.width.thin" title="Thin"><span class="draw-width-dot" aria-hidden="true"></span></button>
         <button class="btn small draw-width" data-width="5" aria-pressed="false" data-i18n-title="draw.width.medium" title="Medium"><span class="draw-width-dot" aria-hidden="true"></span></button>
@@ -481,9 +481,10 @@
     </div>
     <div class="fn-legend fs-legend" id="graph-legend-fs"></div>
     <div class="graph-controls">
-      <button class="btn small" id="btn-fs-reset" data-i18n="graph.reset">Сбросить</button>
-      <button class="btn small" id="btn-fs-pdf" data-i18n="export.graph_pdf">PDF</button>
+      <button class="btn small" data-i18n-title="tip.fs.reset" id="btn-fs-reset" data-i18n="graph.reset">Сбросить</button>
+      <button class="btn small" data-i18n-title="tip.fs.pdf" id="btn-fs-pdf" data-i18n="export.graph_pdf">PDF</button>
       <span class="status-line" id="graph-fs-status"></span>
+      <span class="draw-mode" id="draw-mode" aria-live="polite"></span>
       <span class="grow"></span>
       <span class="graph-hint" data-i18n="analysis.graph_hint">колесо — масштаб, перетаскивание — сдвиг</span>
     </div>

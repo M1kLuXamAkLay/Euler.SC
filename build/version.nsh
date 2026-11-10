@@ -2,7 +2,7 @@
 ;
 ; The installer reads the version from here and never hard-codes it. A build that
 ; forgets to regenerate this file is caught by tests/test_installer_meta.py.
-!define APP_VERSION       "5.2.3"
+!define APP_VERSION       "5.3.0"
 !define APP_VERSION_MAJOR 5
-!define APP_VERSION_MINOR 2
-!define APP_VERSION_PATCH 3
+!define APP_VERSION_MINOR 3
+!define APP_VERSION_PATCH 0

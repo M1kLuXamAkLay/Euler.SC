@@ -19,17 +19,9 @@ import re
 
 import sympy as sp
 
-from .parser import ExprError, parse
 from .analysis import prepare
-
-# Kept in sync with solver.SYSTEM_VARIABLES: both walk the same systems.
-SYSTEM_VARIABLES = "xyztuvw"
-
-
-def pretty_number(value) -> str:
-    """Plain rendering shared with the solver, imported lazily to avoid a cycle."""
-    from .solver import pretty_number as _pretty
-    return _pretty(value)
+from .parser import ExprError, parse, split_relation
+from .solver import SYSTEM_VARIABLES, format_set_latex, pretty_number
 
 MAX_STEPS = 40
 
@@ -94,7 +86,7 @@ def _linear(left: sp.Expr, right: sp.Expr, var: sp.Symbol) -> list[dict]:
     coeff = sp.simplify(sp.diff(expr, var))
     const = sp.simplify(expr.subs(var, 0))
 
-    steps = [
+    return [
         _step(1, "step.cap.move_one_side",
               f"{_tex(sp.expand(expr))} = 0"),
         _step(2, "step.cap.coefficient",
@@ -104,7 +96,6 @@ def _linear(left: sp.Expr, right: sp.Expr, var: sp.Symbol) -> list[dict]:
         _step(4, "step.cap.divide",
               f"{var.name} = {_tex(sp.simplify(-const / coeff))}"),
     ]
-    return steps
 
 
 def _quadratic(left: sp.Expr, right: sp.Expr, var: sp.Symbol) -> list[dict]:
@@ -573,8 +564,8 @@ def _system_steps(equations: list[str]) -> dict:
     parsed_relations = []
     parsed_expressions = []
     for equation in equations:
-        parts = _split_relation(equation)
-        if parts is None:
+        parts = split_relation(equation)
+        if parts is None or parts[1] != "=":
             continue
         left, _op, right = parts
         try:
@@ -590,8 +581,8 @@ def _system_steps(equations: list[str]) -> dict:
 
     rows: list[list] = []
     for equation in equations:
-        parts = _split_relation(equation)
-        if parts is None:
+        parts = split_relation(equation)
+        if parts is None or parts[1] != "=":
             continue
         left, _op, right = parts
         try:
@@ -602,7 +593,7 @@ def _system_steps(equations: list[str]) -> dict:
 
         expression = sp.expand(lhs - rhs)
         row = [sp.simplify(expression.coeff(symbol)) for symbol in symbols]
-        constant = sp.simplify(expression.subs({s: 0 for s in symbols}))
+        constant = sp.simplify(expression.subs(dict.fromkeys(symbols, 0)))
         row.append(sp.simplify(-constant))
         rows.append(row)
 
@@ -662,16 +653,6 @@ def _system_steps(equations: list[str]) -> dict:
 
 
 
-def _split_relation(text: str):
-    """Split ``left = right`` on the first relation symbol."""
-    for op in ("<=", ">=", "!=", "<", ">", "="):
-        if op in text:
-            left, right = text.split(op, 1)
-            return left.strip(), op, right.strip()
-    return None
-
-
-
 _INEQ_OPS = ("<=", ">=", "<", ">")
 _INEQ_TEX = {"<": "<", "<=": "\\le", ">": ">", ">=": "\\ge"}
 _INEQ_SP = {"<": sp.Lt, "<=": sp.Le, ">": sp.Gt, ">=": sp.Ge}
@@ -723,12 +704,11 @@ def _inequality_steps(text: str) -> dict | None:
                 steps.append(_step(len(steps) + 1, "step.cap.sign_on_interval",
                                    f"{_tex(sp.Interval.open(a, b))}\\colon\\quad f\\left({_tex(probe)}\\right) {sign} 0"))
 
-    from .solver import _format_set_latex
     try:
         solution = sp.solve_univariate_inequality(_INEQ_SP[op](f, 0), var, relational=False)
     except (NotImplementedError, ValueError, TypeError):
         solution = None
-    answer = _format_set_latex(solution, var.name) if solution is not None else None
+    answer = format_set_latex(solution, var.name) if solution is not None else None
     if answer is not None:
         steps.append(_step(len(steps) + 1, "step.cap.ineq_solution", answer))
     return _result("step.title.inequality", steps, latex=answer)

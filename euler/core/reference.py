@@ -26,7 +26,7 @@ import re
 
 # (id, area, level, title, latex, example, keywords)
 _RAW: list[tuple[str, str, str, str, str, str, str]] = [
-    # ------------------------------------------------------------------ алгебра
+    # ------------------------------------------------------------------ algebra
     ("vieta", "algebra", "school", "theorem.vieta",
      r"x^2 + px + q = 0:\quad x_1 + x_2 = -p,\;\; x_1 x_2 = q",
      r"x^2 - 5x + 6 = 0:\; 2 + 3 = 5,\; 2 \cdot 3 = 6",
@@ -128,7 +128,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"x^2 - 5x + 6 > 0:\; x < 2 \text{ или } x > 3",
      "квадратное неравенство парабола ветви quadratic inequality"),
 
-    # ------------------------------------------------------------ тригонометрия
+    # ------------------------------------------------------------ trigonometry
     ("pythagorean-identity", "trigonometry", "school", "theorem.pythagorean_identity",
      r"\sin^2 x + \cos^2 x = 1",
      r"\sin x = 0{,}6 \Rightarrow \cos x = \pm 0{,}8",
@@ -202,7 +202,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"\arcsin \tfrac{1}{2} = \tfrac{\pi}{6},\; \arccos \tfrac{1}{2} = \tfrac{\pi}{3}",
      "обратные тригонометрические arcsin arccos arctan связь"),
 
-    # --------------------------------------------------------------- планиметрия
+    # --------------------------------------------------------------- plane geometry
     ("pythagoras", "geometry", "school", "theorem.pythagoras",
      r"a^2 + b^2 = c^2",
      r"3^2 + 4^2 = 5^2",
@@ -304,7 +304,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"\text{центр } (1;2),\; R=3",
      "уравнение окружности координаты circle equation"),
 
-    # ------------------------------------------------------------ стереометрия
+    # ------------------------------------------------------------ solid geometry
     ("sphere", "stereometry", "school", "theorem.sphere",
      r"V = \frac{4}{3}\pi R^3,\quad S = 4\pi R^2",
      r"R = 3 \Rightarrow V = 36\pi",
@@ -354,7 +354,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"a_1:a_2 = 1:3 \Rightarrow V \text{ в } 27",
      "отношение объемов подобные тела volume ratio"),
 
-    # ------------------------------------------------------------------ пределы
+    # ------------------------------------------------------------------ limits
     ("limit-definition", "limits", "university", "theorem.limit_definition",
      r"\lim_{x \to a} f(x) = L \iff \forall \varepsilon > 0\; \exists \delta > 0:\; |x-a| < \delta \Rightarrow |f(x)-L| < \varepsilon",
      r"\lim_{x \to 2} x^2 = 4",
@@ -416,7 +416,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"\frac{1}{x}:\; -\infty \text{ и } +\infty",
      "односторонний предел слева справа one-sided limit"),
 
-    # ------------------------------------------------------------- производные
+    # ------------------------------------------------------------- derivatives
     ("derivative-definition", "derivatives", "school", "theorem.derivative_definition",
      r"f'(x) = \lim_{\Delta x \to 0} \frac{f(x + \Delta x) - f(x)}{\Delta x}",
      r"(x^2)' = 2x",
@@ -466,7 +466,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"f=x^2y:\; f_x = 2xy,\; f_y = x^2",
      "частная производная дифференциал partial derivative"),
 
-    # --------------------------------------------------------------- интегралы
+    # --------------------------------------------------------------- integrals
     ("newton-leibniz", "integrals", "school", "theorem.newton_leibniz",
      r"\int_a^b f(x)\,dx = F(b) - F(a)",
      r"\int_0^1 x^2 dx = \frac{1}{3}",
@@ -508,7 +508,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"\int \frac{dx}{x^2-1} = \frac{1}{2}\ln\left|\frac{x-1}{x+1}\right|",
      "рациональная дробь простейшие rational fractions"),
 
-    # -------------------------------------------------------------------- ряды
+    # -------------------------------------------------------------------- series
     ("geometric-series", "series", "university", "theorem.geometric_series",
      r"\sum_{n=0}^{\infty} q^n = \frac{1}{1-q},\quad |q| < 1",
      r"\sum \left(\tfrac{1}{2}\right)^n = 2",
@@ -542,7 +542,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"\text{производная принимает промежуточные значения}",
      "дарбу производная промежуточные значения darboux"),
 
-    # ------------------------------------------------------------- вероятность
+    # ------------------------------------------------------------- probability
     ("classical-probability", "probability", "school", "theorem.classical_probability",
      r"P(A) = \frac{m}{n}",
      r"\text{туз из 36 карт}:\; \frac{4}{36} = \frac{1}{9}",
@@ -592,7 +592,7 @@ _RAW: list[tuple[str, str, str, str, str, str, str]] = [
      r"D=1,\; \varepsilon=2:\; P \le 0{,}25",
      "чебышев неравенство chebyshev inequality"),
 
-    # ------------------------------------------------------- комплексные числа
+    # ------------------------------------------------------- complex numbers
     ("complex-form", "complex", "school", "theorem.complex_form",
      r"z = a + bi,\quad |z| = \sqrt{a^2 + b^2}",
      r"z = 3 + 4i:\; |z| = 5",
@@ -817,9 +817,8 @@ def _formula_ids(text: str) -> list[str]:
     lowered = (text or "").lower()
     found: list[str] = []
     for pattern, entry_id in _FORMULA_HINTS:
-        if re.search(pattern, lowered) and entry_id in BY_ID:
-            if entry_id not in found:
-                found.append(entry_id)
+        if re.search(pattern, lowered) and entry_id in BY_ID and entry_id not in found:
+            found.append(entry_id)
     return found
 
 

@@ -15,23 +15,15 @@ import math
 import numpy as np
 import sympy as sp
 
-from .parser import ExprError, parse
+from .parser import ExprError, parse, split_relation
 
 MAX_POINTS = 4000
 DEFAULT_RANGE = (-10.0, 10.0)
 
 
-def _split_relation(text: str):
-    for op in ("<=", ">=", "<", ">", "="):
-        if op in text:
-            left, right = text.split(op, 1)
-            return left.strip(), op, right.strip()
-    return None
-
-
 def _lambdify(raw: str, var: sp.Symbol):
     """Compile the expression to a fast NumPy callable."""
-    relation = _split_relation(raw)
+    relation = split_relation(raw)
     if relation is None:
         expr = parse(raw, var.name)
     else:

@@ -24,13 +24,6 @@ from .bridge.api import Api
 from .transport import Transport
 
 
-def resource_root() -> Path:
-    """Directory holding bundled resources."""
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-    return Path(__file__).resolve().parent.parent
-
-
 def web_root() -> Path:
     """Directory with the frontend.
 

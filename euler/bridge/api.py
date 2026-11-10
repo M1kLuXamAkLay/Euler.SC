@@ -84,6 +84,23 @@ class EngineUnavailable(RuntimeError):
     """The engine never finished loading; the message carries the real cause."""
 
 
+def _default_model() -> str:
+    """Model to use when nothing is configured.
+
+    A model the user installed by hand is preferred over the recommendation,
+    which may not have been downloaded yet.
+    """
+    hardware = _mod("hardware")
+    llm = _mod("llm")
+    installed = [item.name for item in llm.list_models()] if llm.is_running() else []
+    known = [name for name in installed if hardware.spec_for(name)]
+    if known:
+        return known[0]
+    if installed:
+        return installed[0]
+    return hardware.recommend()["model"]
+
+
 def _mod(name: str):
     """Return a warmed module, blocking until the warm-up finishes.
 
@@ -287,9 +304,7 @@ class Api:
                        "eigenvectors": "eigenvec"}
             operation = aliases.get(operation, operation)
 
-            if operation in ("det", "rank", "trace", "eigen", "eigenvec", "lu"):
-                result = module.run(operation, module.to_grid(left))
-            elif operation in ("inv", "transpose"):
+            if operation in ("det", "rank", "trace", "eigen", "eigenvec", "lu", "inv", "transpose"):
                 result = module.run(operation, module.to_grid(left))
             elif operation in ("multiply", "add", "subtract", "system"):
                 if right is None:
@@ -547,13 +562,15 @@ class Api:
         """
         try:
             settings = _mod("settings")
+            hardware = _mod("hardware")
             if not force:
                 cached = settings.load().get("hardware")
-                if cached:
+                # A profile stored by an older build can name a model that has
+                # left the catalogue; recompute rather than recommend a ghost.
+                if cached and hardware.spec_for(cached.get("model", "")):
                     return {"ok": True, "cached": True, **cached}
 
             started = time.perf_counter()
-            hardware = _mod("hardware")
             profile = hardware.recommend()
             profile["probe_ms"] = round((time.perf_counter() - started) * 1000)
             settings.save({"hardware": profile})
@@ -793,7 +810,7 @@ class Api:
                 settings = _mod("settings")
                 llm = _mod("llm")
                 config = settings.load()
-                chosen = model or config.get("model") or "qwen2.5:7b"
+                chosen = model or config.get("model") or _default_model()
                 temperature = float(config.get("temperature", 0.3))
 
                 if not llm.is_running() and not llm.start_server():
@@ -853,7 +870,7 @@ class Api:
 
                 message: dict = {"role": "user", "content": task.strip()}
                 if image_b64:
-                    if llm.supports_vision(chosen):
+                    if _mod("hardware").supports_vision(chosen):
                         message["images"] = [image_b64]
                     else:
                         message["content"] += "\n\n[vision unsupported]"

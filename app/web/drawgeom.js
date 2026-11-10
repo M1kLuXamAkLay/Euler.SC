@@ -77,6 +77,17 @@ function translation(x, y) {
   return [1, 0, 0, 1, x, y];
 }
 
+/** Inverse of an affine matrix, or null when it is singular. */
+function invert(M) {
+  const [a, b, c, d, e, f] = M;
+  const det = a * d - b * c;
+  if (!det || !isFinite(det)) return null;
+  return [
+    d / det, -b / det, -c / det, a / det,
+    (c * f - d * e) / det, (b * e - a * f) / det,
+  ];
+}
+
 /** Scale factor of the transform (geometric mean of the axis scales). */
 function scaleOf(stroke) {
   const [a, b, c, d] = matrixOf(stroke);
@@ -100,9 +111,20 @@ function centroid(stroke) {
   return { x: sx / pts.length, y: sy / pts.length };
 }
 
+/** Four corners of a text label after its transform: top-left, top-right, bottom-right, bottom-left. */
+function textCorners(stroke) {
+  // World y grows up and text grows down the screen, so the label spans [y0 - h, y0].
+  const p0 = stroke.points[0];
+  const M = matrixOf(stroke);
+  return [
+    { x: p0.x, y: p0.y }, { x: p0.x + stroke.w, y: p0.y },
+    { x: p0.x + stroke.w, y: p0.y - stroke.h }, { x: p0.x, y: p0.y - stroke.h },
+  ].map((p) => applyMatrix(M, p));
+}
+
 /** Axis-aligned bounding box of the transformed points, padded in world units. */
 function bounds(stroke, padWorld = 0) {
-  const pts = transformedPoints(stroke);
+  const pts = stroke.tool === 'text' && stroke.w ? textCorners(stroke) : transformedPoints(stroke);
   if (!pts.length) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of pts) {
@@ -124,12 +146,8 @@ function distanceToSegment(p, a, b) {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
-/**
- * Distance from p to the drawn geometry, in world units. `textBox` is the
- * label's size in world units; the caller measures the font, since it owns the
- * canvas.
- */
-function strokeDistance(stroke, p, textBox) {
+/** Distance from p to the drawn geometry, in world units. */
+function strokeDistance(stroke, p) {
   const pts = transformedPoints(stroke);
   if (!pts.length) return Infinity;
 
@@ -138,13 +156,15 @@ function strokeDistance(stroke, p, textBox) {
   }
 
   if (stroke.tool === 'text') {
-    const box = textBox || { w: 0, h: 0 };
-    const x0 = pts[0].x, y0 = pts[0].y;
-    const x1 = x0 + box.w, y1 = y0 + box.h;
-    if (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) return 0;
-    const nx = Math.min(Math.max(p.x, x0), x1);
-    const ny = Math.min(Math.max(p.y, y0), y1);
-    return Math.hypot(p.x - nx, p.y - ny);
+    // Measured in the label's own frame, so a rotated label is hit where it is drawn.
+    const inv = invert(matrixOf(stroke));
+    if (!inv) return Infinity;
+    const q = applyMatrix(inv, p);
+    const x0 = stroke.points[0].x, y0 = stroke.points[0].y;
+    const w = stroke.w || 0, h = stroke.h || 0;   // legacy label without a size: anchor only
+    const nx = Math.min(Math.max(q.x, x0), x0 + w);
+    const ny = Math.min(Math.max(q.y, y0 - h), y0);
+    return Math.hypot(q.x - nx, q.y - ny) * scaleOf(stroke);
   }
 
   if (pts.length === 1) return Math.hypot(p.x - pts[0].x, p.y - pts[0].y);
@@ -213,7 +233,7 @@ function cutPolyline(points, center, radius) {
 const api = {
   newStrokeId, mul, applyMatrix, transformedPoints, translated, scaled, rotated,
   scaleOf, baked, centroid, bounds, distanceToSegment, strokeDistance,
-  dashPattern, arrowHead, cutPolyline,
+  dashPattern, arrowHead, cutPolyline, textCorners, matrixOf,
 };
 root.DrawGeom = api;
 if (typeof module !== 'undefined' && module.exports) module.exports = api;

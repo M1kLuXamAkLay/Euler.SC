@@ -173,10 +173,6 @@ def _strip_latex(value: str) -> str:
     return text
 
 
-def _pdf_escape(text: str) -> str:
-    return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
-
-
 def _wrap(text: str, width: int = MAX_LINE) -> list[str]:
     return textwrap.wrap(text, width=width) or [""]
 

@@ -35,7 +35,7 @@ CLARIFY = "clarify"      # not enough information; ask the user
 
 # Cached classifications. A description of a theorem is stable, so a small
 # dict is enough — no eviction policy beyond a hard cap.
-_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_CACHE: OrderedDict[str, dict] = OrderedDict()
 _CACHE_LIMIT = 200
 
 # Below this confidence the model is guessing, and a guess is worse than a
